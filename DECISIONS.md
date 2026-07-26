@@ -472,7 +472,8 @@ records what was decided, why, and what was rejected.
   network in tests), so a dead default URL is invisible to it. The task 4
   human checkpoint (extension loaded for real, network panel open) remains
   the verification point for live defaults; recorded here so that check
-  explicitly includes the three trust fetches succeeding.
+  explicitly includes all trust fetches succeeding (five, after the
+  conformance lists were added below).
 
 ## 2026-07-26 — C2PA conformance trust lists added as anchor sources
 
@@ -502,3 +503,42 @@ records what was decided, why, and what was rejected.
   standards-maintained version — deliberately not pinned to a commit:
   freezing trust anchors would freeze signer onboarding and revocation. The
   24h trust cache bounds staleness either way.
+
+## 2026-07-26 — State at task 3 close / handoff notes for task 4
+
+Task 3 (and follow-ups) are complete: real C2PA provider in the service
+worker, remote manifests, trust caching, conformance trust lists, egress
+allowlist test, real-AI fixture. 73 tests green; `npm run build` produces a
+loadable `dist/`. Task 4 per plan.md §8: content script, single-image
+validation on a test page, one badge — **human checkpoint before
+proceeding**.
+
+Accumulated obligations that land on task 4, consolidated from the entries
+above:
+
+- **First real-browser run.** Nothing has been loaded into Chrome yet. The
+  first `analyze()` in a real MV3 worker exercises the FileReaderSync shim,
+  WASM init via `chrome.runtime.getURL`, and the Cache API trust cache
+  outside Node for the first time.
+- **Network-panel audit (constraint 3).** While validating a test image:
+  exactly five trust fetches on first run
+  (`verify.contentauthenticity.org` ×3, `raw.githubusercontent.com` ×2),
+  none on a warm run within 24h (cache), no other egress except a
+  remote-manifest fetch for assets that reference one. Findings feed the
+  Phase 3 privacy write-up.
+- **Real AI image end-to-end:** `fixtures/ai_declared.png` (or any fresh
+  OpenAI/Firefly image) through the content script should badge as
+  AI — declared, now expected Trusted via the conformance list.
+- **Remote-manifest CORS reality check:** confirm behavior on hosts without
+  permissive CORS (expected: `remote-manifest-unavailable` detail until
+  host permissions land).
+
+Asks task 4 must put to the owner before proceeding (§8):
+
+- `content_scripts` registration and host access — a permission change.
+- Badge wording/presentation — verdict wording is brand territory; note
+  plan.md Phase 3 expects a first `/impeccable init` pass around now so
+  brand context exists while UI is built.
+
+The seam to build against: `analyzeMedia()` in `src/background/index.ts`
+(message protocol shape is a free choice; record it here).
