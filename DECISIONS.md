@@ -197,6 +197,21 @@ records what was decided, why, and what was rejected.
     it inlines the WASM but spawns the same worker.
 - **Upstream note:** `chrome-extension:` support for `workerSrc` would make
   `c2pa-web` viable in extension pages; worth filing/watching on c2pa-js.
+- **Upgrade policy (added 2026-07-26):** because this arrangement depends on
+  SDK internals (the wasm-bindgen Blob usage, error strings, settings
+  keys), `@contentauth/c2pa-web` and `@contentauth/c2pa-wasm` are pinned to
+  exact versions in `package.json` — no caret/tilde ranges, and `c2pa-wasm`
+  is declared directly rather than ridden in transitively. SDK version
+  bumps are deliberate events: done manually, never by an automated range
+  resolution, and the full integration test suite (`c2pa-provider.test.ts`,
+  `egress.test.ts` — the tests that run the real WASM) must pass before the
+  bump merges.
+- **Exit condition:** if upstream changes break the direct-wasm integration
+  twice, stop extending the shim and migrate to the offscreen-document
+  pattern (own worker file importing `c2pa-wasm`, `offscreen` permission
+  ask, message relay). Two breaks would mean the internals this rests on
+  are churning; the shim is only worth keeping while it stays ~50 lines of
+  stable glue.
 
 ### `FileReaderSync`/Blob shim (`src/providers/c2pa/blob-shim.ts`)
 
