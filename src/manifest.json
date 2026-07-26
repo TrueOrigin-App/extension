@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "TrueOrigin",
+  "version": "0.1.0",
+  "description": "Checks images for provenance signals (C2PA Content Credentials) to help answer whether content is AI-generated.",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
