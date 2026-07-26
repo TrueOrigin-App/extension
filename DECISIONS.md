@@ -434,3 +434,42 @@ records what was decided, why, and what was rejected.
   telemetry, CAWG trust fetches) breaks the build instead of shipping. The
   test also proves the URL-served trust config is applied, not just fetched
   (C.jpg must validate as Trusted through it).
+
+## 2026-07-26 — Real AI-declared fixture; trust-URL fix
+
+### `fixtures/ai_declared.png`: real OpenAI provenance in the test suite
+
+- **What:** the deferred "real AI image" end-to-end test now exists. The
+  owner supplied a gpt-image 2.0 generation carrying a claim v2 manifest
+  from "OpenAI Media Service API" (`c2pa.created` with
+  `digitalSourceType: trainedAlgorithmicMedia`, signed by "OpenAI OpCo,
+  LLC"). Integration tests assert the provider maps it to `ai-declared`
+  (confidence 1) and that the full pipeline emits the `ai-declared`
+  verdict; the egress suite confirms analyzing it makes no network
+  requests.
+- **What it proved:** the signer is absent from both the c2pa-rs test
+  anchors and — verified against the live lists — the CR trust list
+  (2026-07-26), so the image validates as `Valid` with
+  `signingCredential.untrusted`, not `Trusted`. Real production AI
+  provenance would read Unknown under a Trusted-only rule; the
+  accept-AI-at-Valid decision is now exercised by a real asset in CI.
+- **Phase 2 note:** the CR list is Adobe's known-certificates list, not the
+  C2PA conformance program's trust list. Evaluate adding the conformance
+  list as a second anchor source — it likely covers signers (OpenAI among
+  them) that CR lags on, which matters more once "Human — verified"
+  coverage is in focus.
+
+### Trust list URLs corrected to verify.contentauthenticity.org
+
+- **What:** `DEFAULT_TRUST_CONFIG` pointed at
+  `contentcredentials.org/trust/*`. Probing the new fixture revealed
+  `allowed.pem` 404s there — only `anchors.pem` and `store.cfg` redirect to
+  `verify.contentauthenticity.org`, where all three files exist (with
+  `access-control-allow-origin: *`). Shipped config would have failed
+  provider initialization on first use. All three URLs now point at
+  `verify.contentauthenticity.org` directly.
+- **Why tests missed it:** the egress suite stubs fetch (by design — no
+  network in tests), so a dead default URL is invisible to it. The task 4
+  human checkpoint (extension loaded for real, network panel open) remains
+  the verification point for live defaults; recorded here so that check
+  explicitly includes the three trust fetches succeeding.

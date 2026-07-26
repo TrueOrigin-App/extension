@@ -158,6 +158,14 @@ describe("egress allowlist", () => {
     expect(drainRecent()).toEqual([]);
   });
 
+  it("a real AI-declared image makes no requests", async () => {
+    const result = await provider.analyze(
+      await fixtureInput("ai_declared.png", "image/png"),
+    );
+    expect(result.finding).toBe("ai-declared");
+    expect(drainRecent()).toEqual([]);
+  });
+
   it("a remote-manifest asset requests exactly its embedded URL", async () => {
     const result = await provider.analyze(await fixtureInput("cloud.jpg"));
     expect((result.detail as C2paDetail).reason).toBe("no-origin-declaration");

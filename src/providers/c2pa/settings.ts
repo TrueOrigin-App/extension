@@ -24,13 +24,15 @@ export interface TrustListConfig {
 }
 
 /** The public Content Credentials trust lists — the same files the CR Verify
- * site and c2patool use. contentcredentials.org currently 301s to
- * verify.contentauthenticity.org; both serve `access-control-allow-origin:
- * *`, so these fetches need no host permissions. */
+ * site and c2patool use. Addressed at verify.contentauthenticity.org
+ * directly: contentcredentials.org 301s there for anchors.pem/store.cfg but
+ * serves a 404 for allowed.pem (verified 2026-07-26). All three serve
+ * `access-control-allow-origin: *`, so these fetches need no host
+ * permissions. */
 export const DEFAULT_TRUST_CONFIG: TrustListConfig = {
-  trustAnchors: "https://contentcredentials.org/trust/anchors.pem",
-  trustConfig: "https://contentcredentials.org/trust/store.cfg",
-  allowedList: "https://contentcredentials.org/trust/allowed.pem",
+  trustAnchors: "https://verify.contentauthenticity.org/trust/anchors.pem",
+  trustConfig: "https://verify.contentauthenticity.org/trust/store.cfg",
+  allowedList: "https://verify.contentauthenticity.org/trust/allowed.pem",
 };
 
 /** Same cap c2pa-web applies to trust-list responses. */

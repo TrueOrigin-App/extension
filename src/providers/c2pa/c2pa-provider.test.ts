@@ -164,11 +164,41 @@ describe("c2pa provider (real WASM)", () => {
     );
   });
 
+  it("maps a real OpenAI-generated image to ai-declared", async () => {
+    const result = await provider.analyze(
+      await fixtureInput("ai_declared.png", "image/png"),
+    );
+    expect(result.finding).toBe("ai-declared");
+    expect(result.confidence).toBe(1);
+    const detail = result.detail as C2paDetail;
+    expect(detail.reason).toBe("ai-source-type");
+    expect(detail.aiSourceTypes).toEqual([
+      "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia",
+    ]);
+    // OpenAI's signing cert is not on the test anchors (nor, as of
+    // 2026-07-26, the CR trust list), so this is the accept-AI-at-Valid
+    // decision exercised by real production provenance.
+    expect(detail.validationState).toBe("Valid");
+    expect(detail.signatureIssuer).toBe("OpenAI OpCo, LLC");
+    expect(detail.claimGenerator).toBe("OpenAI Media Service API");
+  });
+
   it("produces an unknown verdict through the full pipeline", async () => {
     const verdict = await runPipeline([provider], await fixtureInput("C.jpg"));
     expect(verdict.verdict).toBe("unknown");
     expect(verdict.basis).toEqual([]);
     expect(verdict.signals).toHaveLength(1);
+    expect(verdict.failures).toEqual([]);
+  });
+
+  it("produces the AI — declared verdict end to end for a real AI image", async () => {
+    const verdict = await runPipeline(
+      [provider],
+      await fixtureInput("ai_declared.png", "image/png"),
+    );
+    expect(verdict.verdict).toBe("ai-declared");
+    expect(verdict.basis).toHaveLength(1);
+    expect(verdict.basis[0]!.providerId).toBe(C2PA_PROVIDER_ID);
     expect(verdict.failures).toEqual([]);
   });
 });
