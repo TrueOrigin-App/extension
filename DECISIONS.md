@@ -163,3 +163,184 @@ records what was decided, why, and what was rejected.
   registration are both providers-layer files. The §6 Phase 1 exit-criterion
   test (`src/core/pipeline.test.ts`) proves the pipeline weighs a
   never-before-seen provider with zero core changes.
+
+## 2026-07-26 — Task 3: C2PA provider (WASM in the service worker)
+
+### Drive `@contentauth/c2pa-wasm` directly — no worker, no `c2pa-web` runtime
+
+- **What:** the provider calls `WasmReader`/`loadSettings` from
+  `@contentauth/c2pa-wasm` (the engine package of the current c2pa-js
+  monorepo, and a direct dependency of `@contentauth/c2pa-web`) on the
+  service-worker thread. `c2pa-web` remains the installed top-level
+  dependency and the source of all TypeScript types
+  (`ManifestStore`, `Action`, …), but its `createC2pa` entry point is not
+  used at runtime.
+- **Why:** `createC2pa` unconditionally spawns a dedicated Web Worker, and
+  every path to one is closed in an MV3 service worker: the service-worker
+  spec forbids nested workers (`new Worker` is unavailable); its inline
+  fallback builds the worker from a `blob:`/`data:` URL, which MV3
+  extension CSP blocks anyway (and `URL.createObjectURL` does not exist in
+  service workers); and its `workerSrc` escape hatch validates the URL as
+  `https:`-only, rejecting `chrome-extension://` URLs. The wasm-bindgen
+  layer underneath has no worker requirement, and its README sanctions
+  direct use. This keeps validation exactly where plan.md §4 wants it — in
+  the service worker — with no new permissions.
+- **Rejected:**
+  - _Offscreen document hosting the SDK_ (Chrome's sanctioned workaround,
+    Chrome 113+): requires the `offscreen` permission (must-ask, §8), adds a
+    second execution context and message hop, and c2pa-web's blob-worker and
+    `https:`-only `workerSrc` are still blocked in extension pages — it
+    would need our own worker file regardless. Revisit if direct use breaks.
+  - _Patching `c2pa-web`'s worker-URL validation at build time:_ fragile
+    against upstream refactors.
+  - The plan's named fallback (`/inline` import) does not address this:
+    it inlines the WASM but spawns the same worker.
+- **Upstream note:** `chrome-extension:` support for `workerSrc` would make
+  `c2pa-web` viable in extension pages; worth filing/watching on c2pa-js.
+
+### `FileReaderSync`/Blob shim (`src/providers/c2pa/blob-shim.ts`)
+
+- **What:** the WASM reads assets via `new FileReaderSync()`,
+  `blob.slice(start, end)`, and `readAsArrayBuffer(slice)` — sync APIs that
+  exist only in dedicated/shared workers. Since the provider already holds
+  the full bytes (`MediaInput.bytes`), it hands the WASM a byte-backed
+  `ByteBlob` duck-type and installs a `FileReaderSync` polyfill when the
+  global is missing (MV3 service worker, Node tests). The shim refuses to
+  read anything that is not a `ByteBlob`.
+- **Why:** gives the WASM the same synchronous random access the real APIs
+  provide, with ~50 lines and no extra execution context. The same shim is
+  what lets the integration tests run the real WASM in Node.
+- **Risk & containment:** this depends on the binding's observed Blob usage
+  (`size`/`slice`/`readAsArrayBuffer`). The integration tests
+  (`c2pa-provider.test.ts`) run the real WASM on every `npm test`, so an SDK
+  upgrade that touches more of the Blob surface fails loudly, not silently.
+
+### WASM loading: bundled binary, `chrome.runtime.getURL`, lazy init
+
+- **What:** `build.mjs` copies `c2pa_bg.wasm` (8.3 MB) from
+  `@contentauth/c2pa-wasm` into `dist/`; the provider initializes it with
+  `chrome.runtime.getURL("c2pa_bg.wasm")` (wasm-bindgen fetches +
+  `instantiateStreaming`, with a built-in fallback if the MIME type is not
+  `application/wasm`). Initialization is lazy (first `analyze()`) and
+  memoized; a failed init surfaces as a `ProviderFailure` for that request
+  and is retried on the next one.
+- **Why:** exactly the loading strategy plan.md §8 (task 3) prescribes — no
+  runtime CDN dependency, no base64 bloat. Lazy init keeps worker startup
+  free of an 8 MB compile when no image is being analyzed. Failing loud
+  (rather than degrading to weaker verification) keeps verdict semantics
+  stable; the UI can honestly say "couldn't check".
+- **Note:** the manifest now declares
+  `content_security_policy.extension_pages` with `'wasm-unsafe-eval'` —
+  a CSP source required for WASM instantiation, not a permission.
+  The 8.3 MB binary dominates the extension package size; acceptable, and
+  worth revisiting only if the store package limit ever becomes a concern.
+
+### Trust configuration and network posture (§8 constraint 3)
+
+- **What:** trust verification is ON (it is what makes `Trusted` — and thus
+  "Human — verified" — reachable). At provider init, three global
+  trust-infrastructure files are fetched and inlined into the c2pa-rs
+  settings JSON, mirroring `c2pa-web`'s `resolveSettings`:
+  - `https://contentcredentials.org/trust/anchors.pem` (trust anchors, ~44 KB)
+  - `https://contentcredentials.org/trust/store.cfg` (allowed EKUs, ~260 B)
+  - `https://contentcredentials.org/trust/allowed.pem` (end-entity list, ~240 KB)
+
+  These are the same public lists the CR Verify site and c2patool use.
+  They currently 301 to `verify.contentauthenticity.org` and serve
+  `access-control-allow-origin: *` (verified 2026-07-26), so no host
+  permissions are needed. Fetches happen once per service-worker lifetime
+  (memoized init), never per-content.
+
+- **Hard network disable for the SDK itself:** the settings set
+  `verify.ocsp_fetch = false`, `verify.remote_manifest_fetch = false`, and —
+  belt and braces — `core.allowed_network_hosts = []`, which c2pa-rs
+  documents as "all traffic blocked" for its HTTP resolvers. So even if an
+  upstream default changes, no validation path can make a per-content
+  request. (Caveat noted upstream: the CAWG identity assertion does not yet
+  respect `allowed_network_hosts`, c2pa-rs #1645; we also configure no CAWG
+  trust list, so no CAWG fetches are triggered.)
+- **Accepted trade-offs:**
+  - Remote-only manifests (asset carries a manifest URL instead of embedded
+    data) read as "no metadata" → Unknown. Rare in practice; fetching them
+    would reveal per-content viewing activity to manifest hosts. Revisit
+    with an explicit privacy story if coverage warrants.
+  - OCSP revocation is not fetched live (staples and CertificateStatus
+    assertions in the manifest are still honored — c2pa-rs checks those
+    without network).
+  - No trust-list caching across worker restarts yet; belongs with the
+    Phase 2 caching task (likely `chrome.storage` — will need the
+    permission ask).
+  - CAWG identity trust is not configured at launch (no identity UI yet);
+    to be revisited when identity surfaces in the popup.
+- **Verification:** integration tests stub `fetch` to throw and validate
+  fixtures with locally supplied trust text — proving validation itself
+  touches no network. The in-browser network-panel check required by
+  constraint 3 happens at the task 4 human checkpoint, when the extension
+  first loads in Chrome.
+
+### Finding mapping (`src/providers/c2pa/mapping.ts`)
+
+- **What:** a validated store maps to a finding as follows:
+  - `validation_state` not `Valid`/`Trusted` → `none` (a broken manifest
+    proves nothing — even an AI assertion inside it is unusable).
+  - Any action with digital source type `trainedAlgorithmicMedia` or
+    `compositeWithTrainedAlgorithmicMedia`, in **any** manifest of the
+    validated chain (ingredients included) → `ai-declared`. Accepted at
+    both `Valid` and `Trusted`.
+  - Else a `c2pa.created` action on the **active** manifest with
+    `digitalCapture`/`computationalCapture` → `human-provenance`, but
+    **only** at `Trusted`; at merely `Valid` it maps to `none`
+    (untrusted capture).
+  - Else `none` (no origin declaration). Confidence pins to 1 for the two
+    cryptographic findings, 0 for `none`.
+- **Why the asymmetry:** an AI declaration is a statement _against_
+  interest — forging "this is AI" onto human work is an unlikely attack,
+  and requiring `Trusted` would flip real Midjourney/DALL·E output to
+  Unknown whenever the public trust list lags a new signer. A capture claim
+  is the opposite: self-signing a fake "camera" manifest is the obvious
+  attack on a "Human — verified" badge, so it is only as strong as the
+  signer's presence on the trust list. This is §2's "confidence is
+  asymmetric" applied at the provider level.
+- **Scope choices (provisional, recorded for revisit):**
+  - AI set excludes `algorithmicMedia` (procedural, "not based on sampled
+    training data") and `digitalArt` (human digital art) — erring toward
+    Unknown per §2.
+  - Capture accepted only when the _active_ manifest is the capture itself.
+    A capture manifest buried under edit manifests means the edit chain
+    would need benign/disqualifying analysis — Phase 2+ territory; until
+    then such assets are honestly Unknown.
+  - Capture set excludes film scans (`negativeFilm` etc.) for launch.
+- **Rejected:** inferring AI from `softwareAgent` name strings (brittle,
+  vocabulary exists precisely to avoid this); treating `Valid` capture as
+  weaker-confidence human provenance (§2 pins "Human — verified" to
+  cryptographic certainty — there is no "probably human" verdict).
+
+### Test strategy and fixtures
+
+- **What:** two tiers. (1) Pure unit tests drive `mapManifestStore` through
+  the full taxonomy matrix with synthetic store JSON. (2) Integration tests
+  run the real WASM binary in Node — same shim, same settings path as the
+  extension — against fixtures vendored from the c2pa-rs test suite
+  (MIT OR Apache-2.0; see `src/providers/c2pa/fixtures/README.md`):
+  `C.jpg` validates to `Trusted` against the vendored test root bundle,
+  `no_manifest.jpg` exercises absence, and a byte-flipped `C.jpg` exercises
+  `Invalid` (`assertion.dataHash.mismatch`).
+- **Why:** taxonomy correctness lives in fast pure tests; the integration
+  tier proves the real crypto pipeline (including the Trusted state, which
+  needs real chain validation) with no network and no committed secrets —
+  the vendored certificates are c2pa-rs's published "FOR TESTING_ONLY"
+  materials.
+- **Rejected:** generating AI/capture-declared fixtures at test time via the
+  SDK's Builder — its WASM signer requires the callback to produce a full
+  COSE_Sign1 structure (`direct_cose_handling`), i.e. a hand-rolled COSE
+  implementation in test code; too much fragile machinery for what the
+  mapper tests already cover. A real AI-generated image gets validated
+  end-to-end at the task 4 human checkpoint instead.
+
+### Misc
+
+- `@types/node` added (dev tooling) for test file I/O typing.
+- The provider treats read errors `JumbfNotFound`/`UnsupportedType` as
+  "absence of signal" (`none`), not provider failures — an image without
+  metadata is the normal case, not an error. Everything else throws and is
+  isolated by the aggregator as a `ProviderFailure`.

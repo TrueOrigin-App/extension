@@ -4,7 +4,6 @@
 // Phase 1 exit criterion).
 
 import type { SignalProvider } from "../core/types";
+import { createC2paProvider } from "./c2pa";
 
-export const activeProviders: SignalProvider[] = [
-  // C2PA validator lands here in task 3.
-];
+export const activeProviders: SignalProvider[] = [createC2paProvider()];

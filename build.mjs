@@ -6,6 +6,13 @@ const watch = process.argv.includes("--watch");
 async function copyStatic() {
   await mkdir("dist", { recursive: true });
   await cp("src/manifest.json", "dist/manifest.json");
+  // The C2PA validator binary ships inside the extension package and is
+  // loaded via chrome.runtime.getURL("c2pa_bg.wasm") — never fetched from a
+  // CDN at runtime (plan.md §8, task 3).
+  await cp(
+    "node_modules/@contentauth/c2pa-wasm/pkg/c2pa_bg.wasm",
+    "dist/c2pa_bg.wasm",
+  );
 }
 
 /** @type {import("esbuild").BuildOptions} */
