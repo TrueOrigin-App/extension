@@ -473,3 +473,32 @@ records what was decided, why, and what was rejected.
   human checkpoint (extension loaded for real, network panel open) remains
   the verification point for live defaults; recorded here so that check
   explicitly includes the three trust fetches succeeding.
+
+## 2026-07-26 — C2PA conformance trust lists added as anchor sources
+
+- **What:** `DEFAULT_TRUST_CONFIG.trustAnchors` is now an array of three
+  PEM sources, fetched and concatenated by the existing resolver: Adobe's
+  CR anchors, the C2PA conformance program's official trust list, and its
+  TSA (time-stamping authority) trust list — both published in
+  `c2pa-org/conformance-public` on GitHub (raw URLs serve
+  `access-control-allow-origin: *`; still no host permissions). Owner
+  approved promoting this from the earlier Phase 2 note.
+- **Why:** verified against the real WASM: the OpenAI-signed
+  `ai_declared.png` fixture validates as **Trusted** via the conformance
+  list (and via the concatenation) but only **Valid** via Adobe's list —
+  the standards body has certified signers Adobe's list lags on. Wider
+  Trusted coverage upgrades real AI provenance from "valid but untrusted
+  signer" to cryptographically trusted, and directly increases how often
+  the (Trusted-only) "Human — verified" verdict is reachable. The TSA list
+  rides along because c2pa-rs validates timestamp certificates against the
+  same `trust_anchors` store (there is no separate TSA setting), and
+  trusted timestamps keep manifests verifiable after signing certs expire.
+- **Verified:** production concatenation (CR + conformance + TSA +
+  allowed_list + store.cfg) validates `ai_declared.png` → Trusted with no
+  failures, and correctly leaves the test-CA-signed `C.jpg` at Valid. The
+  egress allowlist test derives its allowed URLs from the config, so the
+  two new fetches are covered automatically.
+- **Note:** the lists are fetched from the repo's `main` branch — the live,
+  standards-maintained version — deliberately not pinned to a commit:
+  freezing trust anchors would freeze signer onboarding and revocation. The
+  24h trust cache bounds staleness either way.

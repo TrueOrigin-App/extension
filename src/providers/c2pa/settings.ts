@@ -23,14 +23,27 @@ export interface TrustListConfig {
   allowedList?: string | string[];
 }
 
-/** The public Content Credentials trust lists — the same files the CR Verify
- * site and c2patool use. Addressed at verify.contentauthenticity.org
- * directly: contentcredentials.org 301s there for anchors.pem/store.cfg but
- * serves a 404 for allowed.pem (verified 2026-07-26). All three serve
- * `access-control-allow-origin: *`, so these fetches need no host
- * permissions. */
+/** Trust anchors from two sources, concatenated (verified 2026-07-26; all
+ * serve `access-control-allow-origin: *`, so no host permissions needed):
+ *
+ * - Adobe's Content Credentials known-certificates lists, addressed at
+ *   verify.contentauthenticity.org directly (contentcredentials.org 301s
+ *   there for anchors.pem/store.cfg but 404s allowed.pem) — the lists the
+ *   CR Verify site and c2patool use.
+ * - The C2PA conformance program's official trust list and TSA trust list,
+ *   published by the standards body itself. These cover conforming
+ *   generators Adobe's list lags on (e.g. OpenAI's signer validates as
+ *   Trusted only via the conformance list), and the TSA list keeps
+ *   timestamped manifests verifiable after signing certs expire. c2pa-rs
+ *   validates timestamp certificates against the same trust_anchors store,
+ *   so the TSA list is concatenated here rather than configured separately.
+ */
 export const DEFAULT_TRUST_CONFIG: TrustListConfig = {
-  trustAnchors: "https://verify.contentauthenticity.org/trust/anchors.pem",
+  trustAnchors: [
+    "https://verify.contentauthenticity.org/trust/anchors.pem",
+    "https://raw.githubusercontent.com/c2pa-org/conformance-public/main/trust-list/C2PA-TRUST-LIST.pem",
+    "https://raw.githubusercontent.com/c2pa-org/conformance-public/main/trust-list/C2PA-TSA-TRUST-LIST.pem",
+  ],
   trustConfig: "https://verify.contentauthenticity.org/trust/store.cfg",
   allowedList: "https://verify.contentauthenticity.org/trust/allowed.pem",
 };
