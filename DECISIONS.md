@@ -402,3 +402,20 @@ records what was decided, why, and what was rejected.
   one signer-onboarding cycle behind while cutting network chatter to at
   most one refresh per list per day. Revisit with real usage data in
   Phase 2.
+
+### Egress allowlist enforced as a test
+
+- **What:** `src/providers/c2pa/egress.test.ts` runs the real WASM across
+  the whole fixture suite with the provider in its production configuration
+  (shipped `DEFAULT_TRUST_CONFIG`, remote manifests enabled) and fetch
+  instrumented. Allowed egress is exactly: the trust-bundle URLs (at
+  initialization, derived from the shipped config so the allowlist tracks
+  it) and the manifest URL embedded in the asset under test — asserted
+  per-asset, so a remote-manifest fetch during someone else's asset would
+  fail too. Any other URL, whether from our code or from inside the SDK,
+  throws at fetch time and fails the suite.
+- **Why:** turns constraint 3 from a review-time property into a regression
+  guard — an SDK upgrade that grows a new network path (OCSP default flip,
+  telemetry, CAWG trust fetches) breaks the build instead of shipping. The
+  test also proves the URL-served trust config is applied, not just fetched
+  (C.jpg must validate as Trusted through it).
