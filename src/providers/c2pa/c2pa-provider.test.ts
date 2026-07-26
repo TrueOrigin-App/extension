@@ -1,10 +1,19 @@
 // Integration tests: the real C2PA WASM validator driven exactly as the MV3
 // service worker drives it (no worker, FileReaderSync shim, settings JSON).
-// Global fetch is stubbed to throw, proving that validation with local trust
-// config touches no network (plan.md §8, constraint 3).
+// Global fetch is stubbed, proving that validation with local trust config
+// touches no network (plan.md §8, constraint 3) except the remote-manifest
+// fetches the tests serve deliberately.
 
 import { readFile } from "node:fs/promises";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { runPipeline } from "../../core/pipeline";
 import type { MediaInput, SignalProvider } from "../../core/types";
 import type { C2paDetail } from "./mapping";
@@ -28,6 +37,14 @@ async function fixtureInput(
 
 let provider: SignalProvider;
 
+// Everything the provider needs is handed to it as bytes/text, so the only
+// legitimate network access is a remote-manifest fetch a test explicitly
+// serves; anything else is a privacy bug.
+const deniedFetch = (url: string): Promise<Response> => {
+  throw new Error(`unexpected network access during validation: ${url}`);
+};
+let fetchHandler: (url: string) => Promise<Response> = deniedFetch;
+
 beforeAll(async () => {
   const [anchors, storeCfg, wasmBytes] = await Promise.all([
     readFile(fixturePath("test_cert_root_bundle.pem"), "utf8"),
@@ -38,11 +55,19 @@ beforeAll(async () => {
     wasmSource: () => new Uint8Array(wasmBytes),
     trust: { trustAnchors: anchors, trustConfig: storeCfg },
   });
-  // Everything the provider needs was handed to it as bytes/text above; any
-  // fetch from here on is a privacy bug.
-  vi.stubGlobal("fetch", () => {
-    throw new Error("network access attempted during local validation");
+  vi.stubGlobal("fetch", (input: string | URL | Request) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : "url" in input
+          ? input.url
+          : String(input);
+    return fetchHandler(String(url));
   });
+});
+
+afterEach(() => {
+  fetchHandler = deniedFetch;
 });
 
 afterAll(() => {
@@ -99,6 +124,43 @@ describe("c2pa provider (real WASM)", () => {
     expect(result.finding).toBe("none");
     expect(["no-c2pa-metadata", "unsupported-format"]).toContain(
       (result.detail as C2paDetail).reason,
+    );
+  });
+
+  it("fetches and validates a remote manifest referenced by the asset", async () => {
+    const manifestBytes = await readFile(fixturePath("cloud_manifest.c2pa"));
+    const requested: string[] = [];
+    fetchHandler = async (url) => {
+      requested.push(url);
+      const response = new Response(new Uint8Array(manifestBytes), {
+        status: 200,
+        headers: { "content-type": "application/c2pa" },
+      });
+      // Node-constructed Responses have url: "" — the WASM's HTTP layer
+      // parses it, and a real fetch would carry the request URL.
+      Object.defineProperty(response, "url", { value: url });
+      return response;
+    };
+
+    const result = await provider.analyze(await fixtureInput("cloud.jpg"));
+    expect(requested).toEqual([
+      "https://cai-manifests.adobe.com/manifests/adobe-urn-uuid-5f37e182-3687-462e-a7fb-573462780391",
+    ]);
+    expect(result.finding).toBe("none");
+    const detail = result.detail as C2paDetail;
+    expect(detail.reason).toBe("no-origin-declaration");
+    expect(detail.validationState).toBe("Valid");
+  });
+
+  it("treats an unreachable remote manifest as absence, not failure", async () => {
+    fetchHandler = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const result = await provider.analyze(await fixtureInput("cloud.jpg"));
+    expect(result.finding).toBe("none");
+    expect(result.confidence).toBe(0);
+    expect((result.detail as C2paDetail).reason).toBe(
+      "remote-manifest-unavailable",
     );
   });
 

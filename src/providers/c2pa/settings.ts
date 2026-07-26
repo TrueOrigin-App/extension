@@ -5,10 +5,14 @@
 // c2pa-rs sdk/src/settings/mod.rs — unknown keys are silently ignored, so
 // key names here must match exactly).
 //
-// Free-tier privacy (plan.md §8, constraint 3): the trust-list fetches
-// configured here are global trust-infrastructure requests made once per
-// provider initialization — never per-content, and never carrying media
-// bytes or page URLs. Every request type is documented in DECISIONS.md.
+// Free-tier privacy (plan.md §8, constraint 3): media bytes and page URLs
+// never leave the machine. The network requests configured here are (a) the
+// global trust-list fetches — cached with a TTL, never per-content — and
+// (b) remote manifest fetches, a per-asset request for the manifest URL
+// embedded in the asset itself, enabled deliberately and disclosed
+// (DECISIONS.md, 2026-07-26 follow-up).
+
+import { cachedFetchText } from "./trust-cache";
 
 export interface TrustListConfig {
   /** PEM text, an http(s) URL to a PEM file, or an array of either. */
@@ -36,29 +40,15 @@ function isUrl(value: string): boolean {
   return value.startsWith("http://") || value.startsWith("https://");
 }
 
-async function fetchTrustText(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(
-      `Trust list fetch failed: ${url}: ${response.status} ${response.statusText}`,
-    );
-  }
-  const text = await response.text();
-  if (text.length > MAX_TRUST_RESPONSE_BYTES) {
-    throw new Error(
-      `Trust list response from ${url} exceeds ${MAX_TRUST_RESPONSE_BYTES} bytes`,
-    );
-  }
-  return text;
-}
-
 async function resolveTrustValue(
   value: string | string[],
   options: { requirePem: boolean; label: string },
 ): Promise<string> {
   const parts = Array.isArray(value) ? value : [value];
   const resolved = await Promise.all(
-    parts.map((part) => (isUrl(part) ? fetchTrustText(part) : part)),
+    parts.map((part) =>
+      isUrl(part) ? cachedFetchText(part, MAX_TRUST_RESPONSE_BYTES) : part,
+    ),
   );
   const joined = resolved.join("");
   if (options.requirePem && !joined.includes("-----BEGIN CERTIFICATE-----")) {
@@ -101,19 +91,16 @@ export async function buildSettingsJson(
       // reachable. These are the c2pa-rs defaults, stated explicitly.
       verify_trust: true,
       verify_after_reading: true,
-      // Both are per-content network requests during validation; the free
-      // tier makes none (plan.md §8, constraint 3). remote_manifest_fetch
-      // also means assets with remote-only manifests read as "no metadata"
-      // — an accepted launch trade-off recorded in DECISIONS.md.
+      // Live OCSP is a per-content request to certificate authorities;
+      // staples and CertificateStatus assertions embedded in manifests are
+      // still honored without network.
       ocsp_fetch: false,
-      remote_manifest_fetch: false,
-    },
-    core: {
-      // Belt and braces: an empty allowlist makes the SDK's own HTTP
-      // resolvers block ALL network traffic, so no validation path can
-      // phone home even if a fetch flag above is wrong or changes upstream.
-      // (Trust lists are fetched by this file, not by the SDK.)
-      allowed_network_hosts: [],
+      // Assets that carry only a manifest URL get that URL fetched — a
+      // disclosed per-asset request for the provenance the asset itself
+      // points to (DECISIONS.md). Because manifests may live on any host,
+      // core.allowed_network_hosts cannot be used as a blanket block here;
+      // ocsp_fetch=false is what keeps the SDK's other network path off.
+      remote_manifest_fetch: true,
     },
   });
 }

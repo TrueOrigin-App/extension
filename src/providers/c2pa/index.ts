@@ -4,10 +4,10 @@
 // because an MV3 service worker cannot host the dedicated worker c2pa-web
 // requires. See DECISIONS.md (task 3).
 //
-// Free tier privacy (plan.md §8, constraint 3): media bytes never leave the
-// machine — validation is local WASM, the SDK's own network access is
-// hard-disabled via settings, and the only requests made are the global
-// trust-list fetches configured in settings.ts.
+// Free tier privacy (plan.md §8, constraint 3): media bytes and page URLs
+// never leave the machine — validation is local WASM. Network requests are
+// limited to the cached global trust-list fetches and the disclosed
+// remote-manifest fetches configured in settings.ts.
 
 import initWasm, {
   WasmReader,
@@ -74,7 +74,7 @@ function thrownMessage(thrown: unknown): string {
   return String(thrown);
 }
 
-/** Maps read errors that mean "nothing to see here" (rather than "the check
+/** Maps read errors that mean "nothing usable here" (rather than "the check
  * broke") to an absence detail; returns undefined for genuine failures. */
 function absenceDetail(thrown: unknown): C2paDetail | undefined {
   const message = thrownMessage(thrown);
@@ -83,6 +83,13 @@ function absenceDetail(thrown: unknown): C2paDetail | undefined {
   }
   if (message.includes("UnsupportedType")) {
     return { reason: "unsupported-format" };
+  }
+  // The asset references a remote manifest that could not be retrieved
+  // (offline, 404, or CORS-blocked until broad host permissions land in
+  // task 4/5). The check ran; the referenced provenance was unreachable —
+  // that is an absence the popup can disclose, not a provider failure.
+  if (message.includes("RemoteManifestFetch")) {
+    return { reason: "remote-manifest-unavailable" };
   }
   return undefined;
 }

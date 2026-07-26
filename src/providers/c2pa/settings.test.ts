@@ -8,7 +8,7 @@ afterEach(() => {
 });
 
 describe("buildSettingsJson", () => {
-  it("passes literal trust values through and hard-disables SDK network", async () => {
+  it("passes literal trust values through with the expected verify flags", async () => {
     const json = await buildSettingsJson({
       trustAnchors: PEM,
       trustConfig: "1.3.6.1.5.5.7.3.36",
@@ -20,8 +20,11 @@ describe("buildSettingsJson", () => {
     expect(settings.verify.verify_trust).toBe(true);
     expect(settings.verify.verify_after_reading).toBe(true);
     expect(settings.verify.ocsp_fetch).toBe(false);
-    expect(settings.verify.remote_manifest_fetch).toBe(false);
-    expect(settings.core.allowed_network_hosts).toEqual([]);
+    // Remote manifests are fetched deliberately, with disclosure
+    // (DECISIONS.md) — and that requires the SDK's network resolvers to be
+    // unrestricted, so there must be no allowed_network_hosts block.
+    expect(settings.verify.remote_manifest_fetch).toBe(true);
+    expect(settings.core).toBeUndefined();
   });
 
   it("fetches and inlines URL trust values, concatenating arrays", async () => {

@@ -33,6 +33,7 @@ export interface C2paDetail {
   reason:
     | "no-c2pa-metadata"
     | "unsupported-format"
+    | "remote-manifest-unavailable"
     | "invalid-manifest"
     | "ai-source-type"
     | "trusted-capture"

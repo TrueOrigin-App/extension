@@ -344,3 +344,61 @@ records what was decided, why, and what was rejected.
   "absence of signal" (`none`), not provider failures — an image without
   metadata is the normal case, not an error. Everything else throws and is
   isolated by the aggregator as a `ProviderFailure`.
+
+## 2026-07-26 — Task 3 follow-up: remote manifests enabled, trust lists cached
+
+### Remote manifest fetching: ON, with disclosure (owner decision)
+
+- **What:** `verify.remote_manifest_fetch = true`. When an asset carries only
+  a manifest URL (XMP `dcterms:provenance` or JUMBF reference), the SDK
+  fetches that URL to retrieve the provenance. Verified against the real
+  WASM: the fetch is a single async `fetch()` of the manifest URL (SW-safe;
+  the wasm has no sync-XHR path), and the retrieved manifest goes through
+  the full validation pipeline (`fixtures/cloud.jpg` +
+  `cloud_manifest.c2pa` integration test).
+- **Privacy framing:** this is a per-asset request that reveals to the
+  manifest host that the asset is being viewed. It does not carry media
+  bytes or page URLs (constraint 3 intact), and it is the request the asset
+  itself asks a validator to make. **Disclosure obligation:** the Phase 3
+  privacy write-up and store listing must state that assets referencing
+  remote provenance trigger a fetch of that reference; the popup can
+  disclose it per-image later (wording is Phase 3 brand work).
+- **Consequences:**
+  - `core.allowed_network_hosts` (the previous belt-and-braces block-all)
+    is removed — manifests may live on any host, so a blanket block is
+    incompatible with this feature. `ocsp_fetch = false` remains the guard
+    on the SDK's only other reading-time network path.
+  - An unreachable remote manifest (offline, 404, CORS) maps to finding
+    "none" with detail reason `remote-manifest-unavailable` — the check ran
+    and the referenced provenance was unreachable, which is an absence the
+    popup can disclose, not a provider failure. Error shape
+    (`C2pa(RemoteManifestFetch(...))`) verified against the real WASM.
+  - **CORS caveat:** until broad host permissions land (task 4/5, with the
+    required ask), cross-origin manifest fetches only succeed where hosts
+    serve permissive CORS headers. Host permissions will lift this; noted
+    for the task 4 checkpoint.
+
+### Trust lists cached via the Cache API, 24h TTL, stale-on-error
+
+- **What:** trust-list fetches now go through
+  `src/providers/c2pa/trust-cache.ts`: a Cache API cache
+  (`trueorigin-trust-v1`) stamped with a fetched-at header. Entries younger
+  than 24h are served without network; stale entries are refetched; a
+  failed refetch falls back to the stale copy (a day-old trust list beats
+  disabled verification). Cache writes are best-effort; environments
+  without `caches` (Node tests) degrade to plain fetches.
+- **Why:** MV3 terminates idle service workers in ~30s, so the previous
+  "once per worker lifetime" memoization would refetch ~285 KB many times
+  per browsing session; upstream's own HTTP caching hints are too short
+  (max-age=60 on the allowed list) to absorb that.
+- **Why Cache API and not `chrome.storage`:** `chrome.storage.local` would
+  require adding the `storage` permission (a must-ask under §8, and a dent
+  in the zero-permission posture the trust positioning leans on). The Cache
+  API is available in service workers with no manifest permission and is
+  purpose-built for URL-keyed responses. Trade-off: browser storage
+  eviction could theoretically clear it, in which case the worst case is a
+  refetch — graceful.
+- **TTL choice:** 24h. Upstream serves s-maxage=12h; a day keeps us at most
+  one signer-onboarding cycle behind while cutting network chatter to at
+  most one refresh per list per day. Revisit with real usage data in
+  Phase 2.
