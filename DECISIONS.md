@@ -84,3 +84,82 @@ records what was decided, why, and what was rejected.
   notes the trademark carve-out for the TrueOrigin name (plan.md §7).
 - **Why:** the repo needs a concrete copyright holder; the sole committer is
   the obvious one. Trivial to change if ownership moves to an org entity.
+
+## 2026-07-26 — Task 2: signal pipeline (interface, aggregator, verdict mapper)
+
+### `MediaInput` shape
+
+- **What:** `{ bytes: Uint8Array; mimeType: string; sourceUrl?: string }`
+  (plan.md §3 references the type but leaves it undefined).
+- **Why:** the C2PA SDK needs raw bytes plus a MIME type; `sourceUrl` exists
+  for local uses only (verdict caching in task 5, popup display) and is
+  documented as never leaving the machine (§8 constraint 3).
+- **Rejected:** `Blob` (byte-acquisition strategy is task 4/5 territory —
+  `Uint8Array` is the lower-level common denominator and structured-clones
+  cleanly through message passing); an `element` reference (providers must
+  run in the service worker, which has no DOM).
+
+### Core layout and conflict resolution by finding precedence
+
+- **What:** `src/core/types.ts` (shared types), `aggregator.ts` (collect),
+  `verdict.ts` (map), `pipeline.ts` (compose). Cross-provider conflicts are
+  resolved in the mapper by finding precedence:
+  `ai-declared > human-provenance > ai-indicated (above threshold) > unknown`.
+- **Why:** the findings already encode the cryptographic/probabilistic split,
+  so precedence is principled, not score-juggling: crypto outranks
+  probabilistic (§2 "confidence is asymmetric"), and between the two crypto
+  findings an AI declaration wins because a false "Human — verified" is the
+  worst emission possible and §2 defines that verdict as requiring "no
+  disqualifying edits". Losing signals are preserved in `Verdict.signals`
+  so the popup can surface conflicts honestly.
+- **Rejected:** numeric confidence-weighted scoring across findings (invites
+  a probabilistic signal to outvote a cryptographic one — exactly what §2
+  forbids); resolving conflicts inside the aggregator (kept it a pure
+  collect-and-isolate layer so the taxonomy rules live in one file).
+
+### `Verdict` carries basis, all signals, and failures
+
+- **What:** `{ verdict, basis, signals, failures }` — the winning signals,
+  every signal collected (including below-threshold and conflicting ones),
+  and per-provider failures.
+- **Why:** §3 requires "verdict + supporting detail for the popup"; the
+  progressive-disclosure popup (§4) needs the full evidence, and honest UI
+  should be able to say "provider X errored" rather than silently claiming
+  it checked everything.
+
+### Provider failures are isolated, and malformed results are rejected
+
+- **What:** the aggregator runs providers via `Promise.allSettled`; a throw
+  or a malformed `SignalResult` (finding outside the taxonomy, confidence
+  not a finite number in [0, 1]) becomes a `ProviderFailure`, never a signal
+  and never a crash. Failures contribute nothing to the verdict — an error
+  maps toward Unknown, never toward any claim.
+- **Why:** one broken provider must not sink the pipeline or corrupt the
+  taxonomy (a buggy provider inventing a "not-ai" finding is caught here).
+- **Rejected:** clamping bad confidence values into range (silently
+  laundering garbage into evidence); per-provider timeouts (real concern for
+  WASM, but it belongs with scan scheduling in Phase 2).
+
+### `AI_LIKELY_MIN_CONFIDENCE = 0.7`, provisional
+
+- **What:** a single named threshold in `src/core/verdict.ts`; probabilistic
+  signals at or above it yield "ai-likely", below it they remain visible in
+  `Verdict.signals` but produce no verdict.
+- **Why:** §2 requires "above threshold" without fixing a value, and no real
+  probabilistic provider exists until Phase 4 — any number is a placeholder,
+  so it is one constant, documented as provisional, revisited when a real
+  classifier's operating characteristics are known. 0.7 errs toward Unknown,
+  matching the false-accusation failure mode §2 warns about.
+
+### Provider registry: `src/providers/index.ts` exports `activeProviders`
+
+- **What:** the list of providers the extension runs lives inside the
+  providers directory; core never imports from `src/providers/` — the
+  pipeline takes providers as an argument, and the service worker will wire
+  the two together (task 3+). The mock provider (`src/providers/mock.ts`) is
+  a test fixture and stays out of the registry.
+- **Why:** makes "adding a provider changes nothing outside `src/providers/`"
+  (§8 constraint 4) structurally true: the implementation and its
+  registration are both providers-layer files. The §6 Phase 1 exit-criterion
+  test (`src/core/pipeline.test.ts`) proves the pipeline weighs a
+  never-before-seen provider with zero core changes.
