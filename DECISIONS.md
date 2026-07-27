@@ -699,3 +699,26 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
 
 - Same rationale as plan.md's entry: authored docs stay out of repo-wide
   formatting; formatters are scoped to code.
+
+## 2026-07-26 — Impeccable scoped to the project; formatter fence
+
+### Vendored skill + shared settings committed (why, alternatives)
+
+- The impeccable skill is vendored at `.claude/skills/impeccable/` with
+  its detector hooks and an `enabledPlugins` override (disabling the
+  owner's global impeccable plugin here) in the committed
+  `.claude/settings.json`, so every contributor runs the same pinned
+  version. Rejected: relying on each contributor's global plugin
+  install (version drift, doubled hooks for anyone with both).
+  Updates are deliberate: `npx impeccable check` / `update`, landing as
+  reviewable commits. The installer honors hooks living in the shared
+  settings.json and won't re-duplicate them into settings.local.json.
+- Per-machine files stay out of the repo: `.claude/settings.local.json`
+  and `.impeccable/config.local.json` (hook consent) are gitignored.
+
+### `.claude/` added to `.prettierignore`
+
+- `format:check` flagged 107 vendored skill files. Formatting them
+  would drift the vendored copy from upstream and pollute every future
+  `npx impeccable update` diff — formatters stay scoped to this
+  project's own code.

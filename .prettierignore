@@ -2,3 +2,4 @@ dist/
 package-lock.json
 plan.md
 PRODUCT.md
+.claude/
