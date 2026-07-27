@@ -199,4 +199,11 @@ This plan is standing context, not a one-shot spec. Work in scoped tasks; keep d
 2. Implement `SignalProvider` interface, aggregator, verdict mapper, with a **mock provider** and unit tests — including the test that a second mock provider plugs in with zero outside changes (§6 Phase 1 exit criterion).
 3. Implement the real C2PA provider (`@contentauth/c2pa-web`, WASM in service worker). **WASM loading: bundle the `.wasm` binary inside the extension package and load it via `chrome.runtime.getURL()`** — do not use the README's CDN-fetch default (runtime network dependency) or the `/inline` base64 variant (bundle bloat, no compileStreaming) unless the bundled approach proves unworkable in the MV3 worker, in which case fall back to `/inline` and record why in DECISIONS.md.
 4. Content script: single-image validation on a test page → one badge. **Checkpoint: human review before proceeding.**
-5. Phase 2 items in §6, one task each, byte-acquisition edge cases last.
+5. Phase 2 items in §6, one task per session, in this order:
+   1. Broad host access — opens with the §8 ask covering both `content_scripts` matches and `host_permissions`, with the optional-host-permissions alternative explicitly evaluated (owner directive, task 4) — then viewport lazy scanning and scan scheduling.
+   2. Verdict caching per URL/content-hash (also collapses the render+analyze double-fetch observed at the task-4 checkpoint).
+   3. Popup: verdict + explanation, progressive disclosure. The first `/impeccable init` pass (Phase 3 timing note) runs before this task so brand context is standing input.
+   4. Google Lens right-click (needs a `contextMenus` permission ask).
+   5. Byte-acquisition edge cases (CORS fallbacks) — last, informed by daily-driver usage.
+
+   During the daily-driver soak (§6 cadence note): acquire a real capture-signed photo from a trust-listed device (Leica/Sony/Pixel or a published Content Credentials sample) so "Human — verified" gets an end-to-end fixture like `ai_declared.png` — that verdict cannot be exercised with self-signed material by design.
