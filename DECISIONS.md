@@ -743,6 +743,101 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
   detect breaking). Blank lines between encapsulated messages are legal,
   so the separator is inert while every source already ends with one.
 
+## 2026-07-26 — Task 5.1: broad host access, viewport lazy scanning, scan scheduling
+
+### Owner decision (§8 ask, resolved before building): broad static access, both keys
+
+- **What:** `content_scripts.matches` and `host_permissions` both become
+  `["http://*/*", "https://*/*"]`. No `permissions` key; nothing optional.
+- **Evaluation presented (per the task-4 owner directive):**
+  - _Broad static, both keys_ (chosen): a broad `content_scripts` match alone
+    already triggers Chrome's maximal "read and change all your data on all
+    websites" install warning, so adding `host_permissions` costs nothing
+    further in warning terms while immediately granting the service worker
+    cross-origin fetch — which fixes the known strict-CORS remote-manifest
+    caveat now and unblocks 5.5's CORS fallbacks and 5.2's double-fetch
+    collapse. Since Chrome 127, users can downgrade any extension to
+    per-site/on-click access in browser UI, so opt-down exists without us
+    building opt-in machinery.
+  - _Broad scripts, defer host_permissions to 5.5_ (rejected): identical
+    install warning, so the deferral reduces capability without reducing
+    scariness.
+  - _Optional host permissions_ (rejected): `optional_host_permissions` +
+    `scripting` + runtime-registered content scripts would minimize the
+    install warning, but the extension would do nothing passively until the
+    user grants access through UI that only exists after the popup task
+    (5.3) — the core promise (verdicts as you browse) would become
+    conditional. Revisitable later as a "minimal footprint" mode without
+    architectural change.
+- **Scope detail:** `http/https` only, deliberately not `<all_urls>` —
+  `file:` is gated behind a user toggle anyway and `ftp:` is dead; narrower
+  is honest. The manifest test pins both keys to exactly this scope.
+
+### Viewport scanning: IntersectionObserver + DOM discovery split
+
+- **What:** discovery and analysis are separate. All `<img>` elements are
+  _discovered_ (initial pass over `document.images`, then a MutationObserver
+  for added subtrees and `src`/`srcset` attribute changes) and handed to one
+  IntersectionObserver (`rootMargin: 200px` lookahead). Only images that
+  actually intersect are fed to the scheduler — discovery observes, it never
+  analyzes, keeping §4's "no full-page sweeps" true on dynamic pages.
+- **Src swaps are identity changes:** a `src`/`srcset` mutation removes any
+  existing badge immediately (a badge for the old bytes is a false claim),
+  forgets the element's scan state, and re-observes it (re-`observe()`
+  always emits a fresh entry, so a visible swapped image re-queues without
+  waiting for a threshold crossing). A verdict that arrives after the image
+  it described was swapped is discarded by a URL recheck before badging.
+- **Rejected:** analyzing on discovery (full-page sweep, exactly what §4
+  forbids); polling `document.images` (misses nothing but burns CPU;
+  MutationObserver is the platform's push channel for this).
+
+### Scan scheduling: dwell debounce + bounded concurrency (`scheduler.ts`)
+
+- **What:** a DOM-free `ScanScheduler` (unit-tested with fake timers) with
+  per-item lifecycle: entering the viewport starts a **250 ms dwell**;
+  leaving before it elapses cancels at zero cost (this is the §4 "debounce
+  viewport churn" requirement — fast scrolling analyzes nothing). Dwelled
+  items queue through a concurrency gate of **2** in-flight analyses;
+  leaving the viewport while queued dequeues, while running lets the
+  analysis finish (the work is paid for; the verdict stays useful). Completed
+  items never re-analyze this page view; failures are likewise terminal for
+  the page view (retry policy belongs with verdict caching, 5.2).
+- **Numbers (provisional):** 250 ms dwell ≈ below-perception delay but
+  enough for flick-scrolling to skip past; concurrency 2 because the WASM
+  validator serializes in the worker anyway — the overlap only hides
+  fetch/encode latency; 200 px lookahead pre-warms near-viewport images
+  without scanning the whole page. Revisit all three against daily-driver
+  feel (§6 cadence note).
+- **Min-size gate:** images under **64 px** on their short side are skipped
+  (icons, avatars, spacers — the badge itself would outsize them). Skipped
+  images are forgotten, not marked done, so one that grows past the
+  threshold is reconsidered on viewport re-entry. Threshold provisional.
+- **In-flight URL coalescing was considered and deferred:** duplicate
+  same-URL images analyze independently this session; the URL-keyed cache
+  (5.2) subsumes coalescing properly. Recorded so 5.2 picks it up.
+
+### Badge lifecycle: keyed per image, event-driven re-anchoring
+
+- **What:** `badge.ts` now keeps one badge per image (a `Map`), so
+  re-analysis replaces rather than stacks. `syncBadges()` re-anchors every
+  badge to its image's current document coordinates, hides badges whose
+  image has a collapsed rect (hidden carousel slides), and removes badges
+  whose image left the document — also untracking the element so a
+  re-inserted image is scanned fresh. Sync runs rAF-coalesced on the events
+  that actually move layout: window resize, any DOM mutation batch,
+  capture-phase subresource `load` events (an image finishing its load
+  shifts everything below it with no mutation), and `document.fonts.ready`.
+- **Known gap (accepted):** pure CSS-driven movement with none of those
+  triggers (animations/transitions repositioning images) leaves a badge
+  stale until the next layout event. A continuous rAF loop would close it
+  at a standing battery cost; revisit only if daily-driver use surfaces it.
+- **Task-4 limitations now lifted:** one-shot scan (dynamic images are
+  discovered), no reposition on resize/layout shift (event-driven sync),
+  badge stacking on re-render (keyed). Still open by design: verdict
+  caching + double-fetch collapse (5.2), cross-origin byte acquisition
+  (5.5), `all_frames` (iframes unscanned — embedded content; needs its own
+  look at frame-flooding cost before enabling).
+
 ### `.impeccable/` fenced from Prettier; hook state files gitignored
 
 - Same rationale as the `.claude/` entry: `hook.cache.json` is generated

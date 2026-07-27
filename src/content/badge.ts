@@ -1,6 +1,7 @@
 // Badge overlay rendering (plan.md §4). Free-choice technique recorded in
-// DECISIONS.md (task 4), subject to two constraints from §8: must not break
-// host-page layout, must be removable.
+// DECISIONS.md (task 4; positioning lifecycle extended in task 5.1), subject
+// to two constraints from §8: must not break host-page layout, must be
+// removable.
 //
 // All badges live inside one absolutely-positioned zero-size host element
 // appended to <html> — the host page's own DOM is never restructured — and
@@ -32,6 +33,11 @@ const BADGE_STYLE = `
 
 let shadowRoot: ShadowRoot | null = null;
 
+// One badge per image, so a re-analysis (src swap) replaces rather than
+// stacks. Entries are dropped by removeBadgeFor/syncBadges when the image
+// goes away.
+const badges = new Map<HTMLImageElement, HTMLDivElement>();
+
 function ensureHost(): ShadowRoot {
   if (shadowRoot?.host.isConnected) return shadowRoot;
 
@@ -52,23 +58,67 @@ function ensureHost(): ShadowRoot {
   return shadowRoot;
 }
 
-/** Renders one verdict badge over the top-left corner of an image. */
-export function renderBadge(image: HTMLImageElement, verdict: VerdictId): void {
-  const root = ensureHost();
+function position(badge: HTMLDivElement, image: HTMLImageElement): void {
   const rect = image.getBoundingClientRect();
-
-  const badge = document.createElement("div");
-  badge.className = "badge";
-  badge.dataset["verdict"] = verdict;
-  badge.textContent = VERDICT_LABELS[verdict];
+  // A collapsed rect means the image is hidden or not laid out (display:none,
+  // an emptied carousel slide) — a badge floating over nothing is a claim
+  // about nothing, so hide it until the image shows again.
+  if (rect.width < 1 || rect.height < 1) {
+    badge.style.display = "none";
+    return;
+  }
+  badge.style.display = "";
   badge.style.left = `${rect.left + window.scrollX + 8}px`;
   badge.style.top = `${rect.top + window.scrollY + 8}px`;
+}
 
-  root.append(badge);
+/** Renders (or updates) the verdict badge over an image's top-left corner. */
+export function renderBadge(image: HTMLImageElement, verdict: VerdictId): void {
+  const root = ensureHost();
+
+  let badge = badges.get(image);
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.className = "badge";
+    badges.set(image, badge);
+    root.append(badge);
+  }
+  badge.dataset["verdict"] = verdict;
+  badge.textContent = VERDICT_LABELS[verdict];
+  position(badge, image);
+}
+
+/** Removes the badge for one image, if it has one. */
+export function removeBadgeFor(image: HTMLImageElement): void {
+  badges.get(image)?.remove();
+  badges.delete(image);
+}
+
+/**
+ * Re-anchors every badge to its image's current layout position, removing
+ * badges whose image has left the document. Called by the content script on
+ * layout-affecting events (resize, mutations, subresource loads).
+ *
+ * @param onImageRemoved lets the caller forget a removed image so a later
+ * re-insertion is scanned fresh.
+ */
+export function syncBadges(
+  onImageRemoved?: (image: HTMLImageElement) => void,
+): void {
+  for (const [image, badge] of badges) {
+    if (image.isConnected) {
+      position(badge, image);
+    } else {
+      badge.remove();
+      badges.delete(image);
+      onImageRemoved?.(image);
+    }
+  }
 }
 
 /** Removes every badge and the overlay host itself. */
 export function removeAllBadges(): void {
   shadowRoot?.host.remove();
   shadowRoot = null;
+  badges.clear();
 }

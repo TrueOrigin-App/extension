@@ -1,11 +1,12 @@
-// Content script (task 4): validate the images on the page and badge each
-// with its verdict. Deliberately one-shot — viewport lazy scanning, verdict
-// caching, and dynamic-DOM handling are task 5 (plan.md §6, Phase 2).
+// Content script (task 5.1): viewport-based lazy scanning (plan.md §4).
+// Images are discovered on load and as the DOM changes, but only analyzed
+// once they enter the viewport (plus lookahead) and dwell there — fast
+// scrolling past an image costs nothing. Scheduling policy lives in
+// scheduler.ts; free choices recorded in DECISIONS.md.
 //
-// Byte acquisition happens here, in page context, with the page's own
-// origin privileges: the localhost test page serves its images same-origin,
-// so no host permissions are involved. Cross-origin acquisition strategies
-// are task 5 territory (plan.md §4, friction point 1).
+// Byte acquisition still happens here, in page context, with the page's own
+// origin privileges — so cross-origin images depend on permissive CORS until
+// the worker-side fallback lands (task 5.5). Verdict caching is task 5.2.
 
 import {
   ANALYZE_MESSAGE_TYPE,
@@ -13,9 +14,18 @@ import {
   type AnalyzeRequest,
   type AnalyzeResponse,
 } from "../messaging/protocol";
-import { renderBadge } from "./badge";
+import { removeBadgeFor, renderBadge, syncBadges } from "./badge";
+import { ScanScheduler } from "./scheduler";
 
 const LOG_PREFIX = "[TrueOrigin]";
+
+// Scheduling constants (provisional; rationale in DECISIONS.md task 5.1).
+const DWELL_MS = 250;
+const MAX_CONCURRENT_ANALYSES = 2;
+const VIEWPORT_LOOKAHEAD = "200px";
+// Images smaller than this on their short side are page furniture (icons,
+// avatars, spacers) — skipped, not analyzed, no badge.
+const MIN_IMAGE_DIMENSION_PX = 64;
 
 /** Fallback MIME detection for servers that omit Content-Type. */
 const EXTENSION_MIME_TYPES: Record<string, string> = {
@@ -48,7 +58,21 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
   await imageSettled(image);
 
   const url = image.currentSrc || image.src;
-  if (!url) return;
+  if (!url) {
+    // Nothing to analyze yet; forget the image so a later src assignment
+    // (which arrives as an attribute mutation) scans it fresh.
+    scheduler.reset(image);
+    return;
+  }
+
+  const rect = image.getBoundingClientRect();
+  if (Math.min(rect.width, rect.height) < MIN_IMAGE_DIMENSION_PX) {
+    // Too small to be content. Forgotten rather than marked done, so an
+    // image that later grows past the threshold is reconsidered when it
+    // re-enters the viewport.
+    scheduler.reset(image);
+    return;
+  }
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -72,21 +96,123 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     throw new Error(`analysis failed: ${result.error}`);
   }
 
-  // Full evidence in the console for the task-4 checkpoint; the popup's
-  // progressive disclosure (Phase 2) is the real home for this detail.
+  if ((image.currentSrc || image.src) !== url) {
+    // The image swapped sources mid-analysis; this verdict describes bytes
+    // no longer on screen. The src mutation has already re-queued it.
+    return;
+  }
+
+  // Full evidence in the console for now; the popup's progressive
+  // disclosure (task 5.3) is the real home for this detail.
   console.info(LOG_PREFIX, url, result.verdict);
   renderBadge(image, result.verdict.verdict);
 }
 
-function main(): void {
-  for (const image of Array.from(document.images)) {
+const scheduler = new ScanScheduler<HTMLImageElement>({
+  dwellMs: DWELL_MS,
+  maxConcurrent: MAX_CONCURRENT_ANALYSES,
+  analyze: (image) =>
     analyzeImage(image).catch((thrown: unknown) => {
       // No badge on failure: a badge is a claim about the image, and a
       // failed check supports none — not even "Unknown", which the mapper
-      // reserves for checks that ran (plan.md §2).
+      // reserves for checks that ran (plan.md §2). Failures are terminal
+      // for this page view; verdict caching (task 5.2) revisits retries.
       console.warn(LOG_PREFIX, "could not analyze", image.currentSrc, thrown);
-    });
+    }),
+});
+
+const intersectionObserver = new IntersectionObserver(
+  (entries) => {
+    for (const entry of entries) {
+      const image = entry.target as HTMLImageElement;
+      if (entry.isIntersecting) {
+        scheduler.enter(image);
+      } else {
+        scheduler.leave(image);
+      }
+    }
+  },
+  { rootMargin: VIEWPORT_LOOKAHEAD },
+);
+
+/** Images currently under observation. */
+const tracked = new WeakSet<HTMLImageElement>();
+
+function track(image: HTMLImageElement): void {
+  if (tracked.has(image)) return;
+  tracked.add(image);
+  intersectionObserver.observe(image);
+}
+
+function untrack(image: HTMLImageElement): void {
+  tracked.delete(image);
+  scheduler.reset(image);
+  intersectionObserver.unobserve(image);
+}
+
+/** An image's source changed: any existing badge now describes the wrong
+ * bytes. Drop it and rescan as if the image were new. */
+function handleSrcChange(image: HTMLImageElement): void {
+  removeBadgeFor(image);
+  if (!tracked.has(image)) {
+    track(image);
+    return;
   }
+  scheduler.reset(image);
+  // Re-observing always yields a fresh entry, so a visible image re-enters
+  // the scheduler immediately instead of waiting for a threshold crossing.
+  intersectionObserver.unobserve(image);
+  intersectionObserver.observe(image);
+}
+
+// Layout sync: badges are positioned in document coordinates (scrolling is
+// free), so they only need re-anchoring when layout itself moves — resize,
+// DOM mutations, subresources loading in above them, fonts swapping in.
+// All rAF-coalesced into one pass over the (small) set of live badges.
+let syncScheduled = false;
+function scheduleSync(): void {
+  if (syncScheduled) return;
+  syncScheduled = true;
+  requestAnimationFrame(() => {
+    syncScheduled = false;
+    syncBadges(untrack);
+  });
+}
+
+const mutationObserver = new MutationObserver((records) => {
+  for (const record of records) {
+    if (record.type === "childList") {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        if (node instanceof HTMLImageElement) track(node);
+        for (const image of node.querySelectorAll("img")) {
+          track(image);
+        }
+      }
+    } else if (record.target instanceof HTMLImageElement) {
+      handleSrcChange(record.target);
+    }
+  }
+  scheduleSync();
+});
+
+function main(): void {
+  for (const image of Array.from(document.images)) {
+    track(image);
+  }
+
+  mutationObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["src", "srcset"],
+  });
+
+  window.addEventListener("resize", scheduleSync);
+  // Capture-phase load events from images/iframes/embeds anywhere in the
+  // page — each one can shift layout below it without any DOM mutation.
+  document.addEventListener("load", scheduleSync, true);
+  document.fonts?.ready.then(scheduleSync, () => undefined);
 }
 
 if (document.readyState === "loading") {
