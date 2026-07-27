@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.DS_Store
+.claude/settings.local.json
+.impeccable/config.local.json
+.impeccable/hook.cache.json
+.impeccable/hook.pending.json

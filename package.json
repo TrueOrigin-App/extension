@@ -1,0 +1,30 @@
+{
+  "name": "trueorigin-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension that aggregates content provenance signals (C2PA Content Credentials) to help answer whether an image is AI-generated.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "test-page": "node test-page/serve.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.2",
+    "@types/node": "^26.1.1",
+    "esbuild": "^0.28.1",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "@contentauth/c2pa-wasm": "0.10.0",
+    "@contentauth/c2pa-web": "0.13.0"
+  }
+}

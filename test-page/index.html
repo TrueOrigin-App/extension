@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TrueOrigin — task 4 test page</title>
+    <style>
+      body {
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+        margin: 2rem auto;
+        max-width: 52rem;
+        padding: 0 1rem;
+        color: #1c2026;
+      }
+      figure {
+        margin: 2.5rem 0;
+      }
+      img {
+        max-width: 100%;
+        display: block;
+      }
+      figcaption {
+        margin-top: 0.5rem;
+        color: #555;
+        font-size: 0.9rem;
+      }
+      code {
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>TrueOrigin test page</h1>
+    <p>
+      Serves the repo's C2PA fixtures for the task-4 checkpoint. With the
+      extension loaded, each image below should get a badge (except where
+      noted); the content script logs full verdict detail to the console under
+      the <code>[TrueOrigin]</code> prefix.
+    </p>
+
+    <figure>
+      <img src="/fixtures/ai_declared.png" alt="AI-declared fixture" />
+      <figcaption>
+        <strong>ai_declared.png</strong> — real OpenAI provenance
+        (<code>trainedAlgorithmicMedia</code>). Expected badge:
+        <em>AI — declared</em>; console detail should show validation state
+        <code>Trusted</code> via the conformance trust list.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <img src="/fixtures/C.jpg" alt="C2PA test-signed fixture" />
+      <figcaption>
+        <strong>C.jpg</strong> — valid manifest, test-CA signer, no origin
+        declaration. Expected badge: <em>Unknown</em>; console reason
+        <code>no-origin-declaration</code>, validation state
+        <code>Valid</code> (test CA is not on the production trust lists).
+      </figcaption>
+    </figure>
+
+    <figure>
+      <img src="/fixtures/no_manifest.jpg" alt="No-metadata fixture" />
+      <figcaption>
+        <strong>no_manifest.jpg</strong> — no C2PA metadata at all. Expected
+        badge: <em>Unknown</em>; console reason <code>no-c2pa-metadata</code>.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <img src="/fixtures/cloud.jpg" alt="Remote-manifest fixture" />
+      <figcaption>
+        <strong>cloud.jpg</strong> — carries only a remote manifest URL
+        (<code>cai-manifests.adobe.com</code>). Expected badge:
+        <em>Unknown</em> either way; the interesting part is the console reason
+        — a successful fetch validates whatever the manifest says, while a
+        CORS-blocked or unreachable fetch shows
+        <code>remote-manifest-unavailable</code>. This is the task-4
+        remote-manifest CORS reality check.
+      </figcaption>
+    </figure>
+
+    <h2>Network-panel audit (plan.md §8, constraint 3)</h2>
+    <p>
+      Inspect the <strong>service worker's</strong> network activity
+      (chrome://extensions → TrueOrigin → “Inspect views: service worker” →
+      Network tab). Expected on a cold run: five trust-list fetches (<code
+        >verify.contentauthenticity.org</code
+      >
+      ×3, <code>raw.githubusercontent.com</code> ×2) plus the
+      <code>cai-manifests.adobe.com</code> fetch triggered by cloud.jpg. Within
+      24 h (warm cache): only the cloud.jpg manifest fetch. Nothing else — no
+      media bytes, no page URLs.
+    </p>
+  </body>
+</html>
