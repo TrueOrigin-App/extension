@@ -722,3 +722,23 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
   would drift the vendored copy from upstream and pollute every future
   `npx impeccable update` diff — formatters stay scoped to this
   project's own code.
+
+## 2026-07-26 — Trust-list parts joined with a newline
+
+### `resolveTrustValue` concatenates with `\n`, not `""`
+
+- Raised by review as defensive hardening; no current source triggers it.
+  RFC 7468 requires PEM BEGIN/END boundaries to occupy their own line. If
+  any configured trust-list URL ever stopped serving a trailing newline,
+  bare concatenation would fuse two boundaries into a 10-dash run, and
+  rustls_pemfile (under c2pa-rs) skips malformed sections silently — the
+  affected anchors would drop out of the trust store with no error, and
+  the `requirePem` substring check would still pass on the remaining
+  certificates. The visible symptom would be capture-provenance assets
+  silently degrading from Trusted to Valid, i.e. human-provenance →
+  unknown.
+- Rejected: normalizing each part to end with a newline before joining
+  (same effect, more code); leaving it and relying on upstream sources to
+  keep their trailing newlines (an invariant we do not control and cannot
+  detect breaking). Blank lines between encapsulated messages are legal,
+  so the separator is inert while every source already ends with one.
