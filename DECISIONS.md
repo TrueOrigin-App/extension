@@ -742,3 +742,15 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
   keep their trailing newlines (an invariant we do not control and cannot
   detect breaking). Blank lines between encapsulated messages are legal,
   so the separator is inert while every source already ends with one.
+
+### `.impeccable/` fenced from Prettier; hook state files gitignored
+
+- Same rationale as the `.claude/` entry: `hook.cache.json` is generated
+  by the design hook and never hand-edited, so `format:check` flagging it
+  is pure noise.
+- `hook.cache.json` and `hook.pending.json` move into the committed
+  `.gitignore`. The impeccable installer had registered them in
+  `.git/info/exclude`, which is per-clone and never shared — every other
+  contributor would have seen the cache as untracked. Rejected: ignoring
+  `.impeccable/` wholesale, which would also swallow `config.json`, the
+  shared config that is meant to be committed.

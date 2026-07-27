@@ -65,15 +65,6 @@ async function resolveTrustValue(
       isUrl(part) ? cachedFetchText(part, MAX_TRUST_RESPONSE_BYTES) : part,
     ),
   );
-  // Newline-separated, not bare-concatenated: RFC 7468 requires the
-  // BEGIN/END boundaries to stand on their own line, and a source that
-  // stopped serving a trailing newline would fuse two boundaries into
-  // `-----END CERTIFICATE----------BEGIN CERTIFICATE-----`. rustls_pemfile
-  // (under c2pa-rs) skips malformed sections silently, so those anchors
-  // would vanish from the trust store with no error — and the requirePem
-  // check below would still pass on the other certificates. Blank lines
-  // between encapsulated messages are legal, so the extra newline is inert
-  // when every source already ends with one (all three do today).
   const joined = resolved.join("\n");
   if (options.requirePem && !joined.includes("-----BEGIN CERTIFICATE-----")) {
     throw new Error(`${options.label} does not contain a PEM certificate`);
