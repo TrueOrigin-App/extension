@@ -542,3 +542,137 @@ Asks task 4 must put to the owner before proceeding (§8):
 
 The seam to build against: `analyzeMedia()` in `src/background/index.ts`
 (message protocol shape is a free choice; record it here).
+
+## 2026-07-26 — Task 4: content script, first badge, localhost test page
+
+### Owner decisions (§8 asks, resolved before building)
+
+- **Content script scope: localhost only.** `content_scripts.matches` is
+  `http://localhost/*` + `http://127.0.0.1/*` (match patterns ignore ports);
+  still no `permissions`/`host_permissions` keys. Owner directive for
+  task 5: when broad access is needed, bring it as a §8 ask covering both
+  `content_scripts` matches and `host_permissions`, with the
+  optional-host-permissions alternative explicitly evaluated. The manifest
+  test now enforces exactly this scope.
+- **Badge wording: plan.md §2 labels verbatim** ("AI — declared",
+  "AI — likely", "Human — verified", "Unknown") in deliberately plain,
+  neutral styling, marked placeholder in `src/content/labels.ts`. Final
+  wording/presentation is Phase 3 brand work (Impeccable).
+
+### Message protocol (`src/messaging/protocol.ts`)
+
+- **What:** one request/response pair over `chrome.runtime.sendMessage`:
+  `{ type: "trueorigin:analyze", bytesBase64, mimeType, sourceUrl }` →
+  `{ ok: true, verdict: WireVerdict } | { ok: false, error: string }`.
+  `WireVerdict` is `Verdict` with each failure's `error: unknown` reduced
+  to a string; everything else passes through. The worker keeps the
+  channel open (`return true`), which also extends its lifetime across the
+  lazy WASM init on first analysis.
+- **Why base64:** extension messaging JSON-serializes payloads — typed
+  arrays do not survive. ~33% size overhead is fine at task-4 scale;
+  revisit at task 5 alongside byte acquisition (Chrome's ~64 MB message
+  cap and double-buffering both argue for moving large-image transport or
+  fetching into the worker once host permissions exist).
+- **Constraint 3 note:** bytes and `sourceUrl` cross an extension-internal
+  channel only; nothing new leaves the machine.
+- **Rejected:** worker-side fetch of the image URL (needs host
+  permissions + hits CORS; in-page fetch runs with the page's own
+  privileges); `chrome.runtime.connect` port streaming (complexity without
+  need at one message per image).
+
+### Badge overlay technique (`src/content/badge.ts`)
+
+- **What:** one zero-size, absolutely-positioned host `<div>` appended to
+  `<html>`, `pointer-events: none`, max z-index, with an open shadow root
+  isolating badge styles both directions. Badges are children positioned
+  in document coordinates over each image's top-left corner, so they
+  scroll with the page. Removing the single host removes everything.
+- **Why:** the host page's DOM is never restructured (§8: must not break
+  layout) and removability is one `remove()` (§8: must be removable).
+- **Accepted task-4 limitations** (task 5 territory, with viewport
+  scanning): no reposition on resize/layout shift, one-shot scan at
+  `document_idle` (dynamically added images unseen), no dedupe or verdict
+  caching.
+- **Failure = no badge.** A failed analysis supports no claim about the
+  image — not even "Unknown", which the mapper reserves for checks that
+  ran. Failures log to the console (`[TrueOrigin]` prefix); honest error
+  presentation belongs to the popup (Phase 2).
+- **Rejected:** wrapping images in a positioned container (restructures
+  host DOM — the constraint this technique exists to satisfy); one host
+  per image (more churn, harder removal, no isolation benefit).
+
+### Scope: every image on the test page, not literally one
+
+- Plan.md §8 says "single-image validation on a test page → one badge",
+  but the accumulated checkpoint obligations (real-AI badge, no-manifest
+  absence, remote-manifest CORS reality check) require several fixtures
+  analyzed in one session. The content script loops over `document.images`
+  — same single-image logic per image, no scheduling/caching machinery.
+
+### Test page and server (`test-page/`)
+
+- `index.html` shows the four vendored fixtures with expected outcomes and
+  the network-audit checklist; `serve.mjs` is a node-stdlib static server
+  (zero dependencies — keeps clear of the §8 new-dependency ask; dev-only,
+  never in the extension package). `npm run test-page`, port 8917, serves
+  an explicit fixture allowlist (images only — never the certs/configs in
+  the same directory).
+
+### Verification
+
+- 80 tests green (73 + 6 protocol + 1 manifest-scope), typecheck clean,
+  `dist/` builds (content.js bundles as IIFE, 3.9 kB). The human
+  checkpoint — first real-browser run, network-panel audit, real-AI badge,
+  remote-manifest CORS behavior — is pending and gates task 5.
+
+## 2026-07-26 — Task 4 checkpoint: PASSED (first real-browser run)
+
+Extension loaded unpacked in Chrome for the first time; owner watched the
+service-worker network panel while the agent drove the test page via
+browser automation. Results feed the Phase 3 privacy write-up.
+
+### Verdicts and badges — all correct
+
+- `ai_declared.png` → **AI — declared**, validation state **Trusted**
+  confirmed in the live console (conformance trust list working in-browser,
+  not just in Node).
+- `C.jpg`, `no_manifest.jpg`, `cloud.jpg` → **Unknown**, each for its
+  expected distinct reason. No content-script errors; badges positioned
+  correctly; re-render on reload works.
+- First real exercise of the FileReaderSync/Blob shim, WASM init via
+  `chrome.runtime.getURL`, and the Cache API trust cache inside a real MV3
+  worker — all behaved as in the Node integration tests.
+
+### Network audit (constraint 3) — clean
+
+- **Cold run (SW panel):** exactly the six expected external requests —
+  `verify.contentauthenticity.org` ×3 (anchors, store.cfg, allowed list),
+  `raw.githubusercontent.com` ×2 (conformance + TSA lists),
+  `cai-manifests.adobe.com` ×1 (the remote manifest cloud.jpg itself
+  references). Plus the local `chrome-extension://…/c2pa_bg.wasm` load.
+  Nothing else — no media bytes, no page URLs, no telemetry.
+- **Warm runs:** page reloads added only `cai-manifests.adobe.com`
+  requests — zero trust-list refetches. The 24 h Cache API trust cache
+  works in the real worker.
+- **Page-side:** only `localhost:8917` requests.
+- **Remote-manifest CORS reality check:** the Adobe manifest fetch
+  returned **200 without host permissions** — `cai-manifests.adobe.com`
+  serves permissive CORS, so the `remote-manifest-unavailable` fallback
+  was not exercised live (it remains covered by integration tests). The
+  fetched manifest validated and still honestly yielded Unknown. Hosts
+  with strict CORS remain a task-5 concern alongside the host-permissions
+  ask.
+
+### Observations for task 5
+
+- **Every image is fetched twice** (browser render + content-script byte
+  acquisition — visible as doubled requests to the local server). Verdict
+  caching / smarter byte acquisition in task 5 should collapse this.
+- **Chrome crashed once** when the owner reloaded the extension through
+  `chrome://extensions` during manual testing. Not reproduced or
+  diagnosed; worth watching during task-5 daily-driver use — if it
+  recurs, suspect the 8 MB WASM worker teardown/restart path first.
+
+Task 5 may proceed, opening with the §8 ask for broad `content_scripts`
+matches + `host_permissions` (optional-host-permissions alternative to be
+evaluated, per the owner's task-4 directive).

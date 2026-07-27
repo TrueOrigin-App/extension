@@ -16,30 +16,42 @@ async function copyStatic() {
 }
 
 /** @type {import("esbuild").BuildOptions} */
-const options = {
-  entryPoints: { background: "src/background/index.ts" },
+const common = {
   bundle: true,
-  format: "esm",
   target: "es2022",
   outdir: "dist",
   sourcemap: watch ? "inline" : false,
   logLevel: "info",
 };
 
+/** One build per extension context: the service worker is a module, but
+ * content scripts are injected as classic scripts and must not leak
+ * bindings into page scope — hence IIFE. */
+const builds = [
+  {
+    ...common,
+    entryPoints: { background: "src/background/index.ts" },
+    format: "esm",
+  },
+  {
+    ...common,
+    entryPoints: { content: "src/content/index.ts" },
+    format: "iife",
+  },
+];
+
 if (watch) {
-  const ctx = await esbuild.context({
-    ...options,
-    plugins: [
-      {
-        name: "copy-static",
-        setup(build) {
-          build.onEnd(copyStatic);
-        },
-      },
-    ],
-  });
-  await ctx.watch();
+  for (const [index, options] of builds.entries()) {
+    const ctx = await esbuild.context({
+      ...options,
+      plugins:
+        index === 0
+          ? [{ name: "copy-static", setup: (b) => b.onEnd(copyStatic) }]
+          : [],
+    });
+    await ctx.watch();
+  }
 } else {
-  await esbuild.build(options);
+  await Promise.all(builds.map((options) => esbuild.build(options)));
   await copyStatic();
 }

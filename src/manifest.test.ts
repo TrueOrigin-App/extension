@@ -16,7 +16,18 @@ describe("manifest", () => {
   it("requests no permissions", () => {
     expect(manifest).not.toHaveProperty("permissions");
     expect(manifest).not.toHaveProperty("host_permissions");
-    expect(manifest).not.toHaveProperty("content_scripts");
+  });
+
+  // Owner-approved scope (task 4): the content script runs on the localhost
+  // test page only. Broadening this is a new §8 ask — task 5 is expected to
+  // bring it, together with host_permissions, as an explicit proposal.
+  it("registers the content script for localhost only", () => {
+    expect(manifest.content_scripts).toEqual([
+      {
+        matches: ["http://localhost/*", "http://127.0.0.1/*"],
+        js: ["content.js"],
+      },
+    ]);
   });
 
   // 'wasm-unsafe-eval' is what lets the service worker instantiate the
