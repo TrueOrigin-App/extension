@@ -26,6 +26,17 @@ const VIEWPORT_LOOKAHEAD = "200px";
 // Images smaller than this on their short side are page furniture (icons,
 // avatars, spacers) — skipped, not analyzed, no badge.
 const MIN_IMAGE_DIMENSION_PX = 64;
+// A hung image load or fetch must never hold an analysis slot forever —
+// two of them would silently stop all scanning for the page view.
+const SETTLE_TIMEOUT_MS = 10_000;
+const FETCH_TIMEOUT_MS = 30_000;
+// Chrome's Accept header for <img> requests. The analysis fetch has to
+// negotiate the same representation the page displayed: on a `Vary: Accept`
+// CDN, the default `*/*` can be served different bytes (e.g. the signed
+// original where the page got an unsigned transcode), and the verdict
+// would describe an image the user never saw.
+const IMAGE_ACCEPT =
+  "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
 /** Fallback MIME detection for servers that omit Content-Type. */
 const EXTENSION_MIME_TYPES: Record<string, string> = {
@@ -49,8 +60,18 @@ function mimeTypeFor(blob: Blob, url: string): string | undefined {
 function imageSettled(image: HTMLImageElement): Promise<void> {
   if (image.complete) return Promise.resolve();
   return new Promise((resolve) => {
-    image.addEventListener("load", () => resolve(), { once: true });
-    image.addEventListener("error", () => resolve(), { once: true });
+    // One shared signal removes both listeners on settle ({once} alone
+    // would leak whichever of the pair never fires), and the timeout caps
+    // how long a load that never settles can occupy an analysis slot —
+    // after it, analysis proceeds with whatever currentSrc holds.
+    const settled = new AbortController();
+    const settle = (): void => {
+      settled.abort();
+      resolve();
+    };
+    image.addEventListener("load", settle, { signal: settled.signal });
+    image.addEventListener("error", settle, { signal: settled.signal });
+    setTimeout(settle, SETTLE_TIMEOUT_MS);
   });
 }
 
@@ -74,7 +95,10 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     return;
   }
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { accept: IMAGE_ACCEPT },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!response.ok) {
     throw new Error(`image fetch failed: HTTP ${response.status}`);
   }
@@ -96,9 +120,10 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     throw new Error(`analysis failed: ${result.error}`);
   }
 
-  if ((image.currentSrc || image.src) !== url) {
-    // The image swapped sources mid-analysis; this verdict describes bytes
-    // no longer on screen. The src mutation has already re-queued it.
+  if (!image.isConnected || (image.currentSrc || image.src) !== url) {
+    // The image left the document or swapped sources mid-analysis; this
+    // verdict describes bytes no longer on screen. (A swap's mutation
+    // record has already re-queued the element.)
     return;
   }
 
@@ -165,10 +190,13 @@ function handleSrcChange(image: HTMLImageElement): void {
   intersectionObserver.observe(image);
 }
 
-// Layout sync: badges are positioned in document coordinates (scrolling is
-// free), so they only need re-anchoring when layout itself moves — resize,
-// DOM mutations, subresources loading in above them, fonts swapping in.
-// All rAF-coalesced into one pass over the (small) set of live badges.
+// Layout sync: badges are positioned in document coordinates, so plain
+// window scrolling over normal-flow content is free. Everything else that
+// moves an image re-anchors: resize, DOM mutations, subresources loading
+// in above it, fonts swapping in — and scrolls themselves, because
+// position:fixed/sticky subtrees and inner scrollers do move images in
+// document coordinates. All rAF-coalesced into one pass over the (small)
+// set of live badges.
 let syncScheduled = false;
 function scheduleSync(): void {
   if (syncScheduled) return;
@@ -189,7 +217,14 @@ const mutationObserver = new MutationObserver((records) => {
           track(image);
         }
       }
-    } else if (record.target instanceof HTMLImageElement) {
+    } else if (
+      record.target instanceof HTMLImageElement &&
+      record.target.getAttribute(record.attributeName ?? "") !== record.oldValue
+    ) {
+      // Only actual value changes are identity changes: setAttribute
+      // queues a record even when the value is identical (jQuery .attr,
+      // the `img.src = img.src` reload idiom), and reacting to those
+      // would strip the badge and restart the dwell on every write.
       handleSrcChange(record.target);
     }
   }
@@ -206,9 +241,12 @@ function main(): void {
     subtree: true,
     attributes: true,
     attributeFilter: ["src", "srcset"],
+    attributeOldValue: true,
   });
 
   window.addEventListener("resize", scheduleSync);
+  // Scroll events don't bubble; capture also catches inner scrollers.
+  document.addEventListener("scroll", scheduleSync, true);
   // Capture-phase load events from images/iframes/embeds anywhere in the
   // page — each one can shift layout below it without any DOM mutation.
   document.addEventListener("load", scheduleSync, true);

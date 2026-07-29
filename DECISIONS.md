@@ -743,6 +743,18 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
   detect breaking). Blank lines between encapsulated messages are legal,
   so the separator is inert while every source already ends with one.
 
+### `.impeccable/` fenced from Prettier; hook state files gitignored
+
+- Same rationale as the `.claude/` entry: `hook.cache.json` is generated
+  by the design hook and never hand-edited, so `format:check` flagging it
+  is pure noise.
+- `hook.cache.json` and `hook.pending.json` move into the committed
+  `.gitignore`. The impeccable installer had registered them in
+  `.git/info/exclude`, which is per-clone and never shared — every other
+  contributor would have seen the cache as untracked. Rejected: ignoring
+  `.impeccable/` wholesale, which would also swallow `config.json`, the
+  shared config that is meant to be committed.
+
 ## 2026-07-26 — Task 5.1: broad host access, viewport lazy scanning, scan scheduling
 
 ### Owner decision (§8 ask, resolved before building): broad static access, both keys
@@ -775,10 +787,13 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
 
 ### Viewport scanning: IntersectionObserver + DOM discovery split
 
-- **What:** discovery and analysis are separate. All `<img>` elements are
-  _discovered_ (initial pass over `document.images`, then a MutationObserver
-  for added subtrees and `src`/`srcset` attribute changes) and handed to one
-  IntersectionObserver (`rootMargin: 200px` lookahead). Only images that
+- **What:** discovery and analysis are separate. All light-DOM `<img>`
+  elements are _discovered_ (initial pass over `document.images`, then a
+  MutationObserver for added subtrees and `src`/`srcset` attribute changes)
+  and handed to one IntersectionObserver (`rootMargin: 200px` lookahead).
+  Images authored inside shadow roots are not discovered — none of the
+  discovery entry points pierce shadow boundaries (still-open list at the
+  end of this entry). Only images that
   actually intersect are fed to the scheduler — discovery observes, it never
   analyzes, keeping §4's "no full-page sweeps" true on dynamic pages.
 - **Src swaps are identity changes:** a `src`/`srcset` mutation removes any
@@ -836,16 +851,85 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
   badge stacking on re-render (keyed). Still open by design: verdict
   caching + double-fetch collapse (5.2), cross-origin byte acquisition
   (5.5), `all_frames` (iframes unscanned — embedded content; needs its own
-  look at frame-flooding cost before enabling).
+  look at frame-flooding cost before enabling), shadow-DOM discovery
+  (images authored inside shadow roots are invisible to `document.images`,
+  the document-rooted MutationObserver, and `querySelectorAll` alike —
+  revisit after the daily-driver soak; Lit-based sites like Reddit are
+  the natural test).
 
-### `.impeccable/` fenced from Prettier; hook state files gitignored
+## 2026-07-28 — Task 5.1 review fixes (pre-merge batch)
 
-- Same rationale as the `.claude/` entry: `hook.cache.json` is generated
-  by the design hook and never hand-edited, so `format:check` flagging it
-  is pure noise.
-- `hook.cache.json` and `hook.pending.json` move into the committed
-  `.gitignore`. The impeccable installer had registered them in
-  `.git/info/exclude`, which is per-clone and never shared — every other
-  contributor would have seen the cache as untracked. Rejected: ignoring
-  `.impeccable/` wholesale, which would also swallow `config.json`, the
-  shared config that is meant to be committed.
+Fixes from the pre-merge review of PR #2; each closes a path to a false or
+stale badge, or to scanning silently stopping. Larger follow-ups the review
+also surfaced (URL-keyed badge invalidation, `removedNodes` handling,
+ResizeObserver revival for small-gated images, a DOM test environment) are
+deliberately not in this batch.
+
+### Analysis fetch pins Chrome's image Accept header
+
+- **What:** the byte-acquisition `fetch` sends the same `Accept` list
+  Chrome sends for `<img>` requests instead of the default `*/*`.
+- **Why:** on `Vary: Accept` content-negotiating CDNs (Cloudflare Polish,
+  Vercel image optimization, Cloudinary `f_auto`, …) `*/*` can be served a
+  different representation than the page displayed — e.g. the signed
+  original while the user sees an unsigned transcode, and transcoding is
+  exactly what strips C2PA. The verdict must describe the bytes on screen.
+- **Rejected:** reading the actual request header via `webRequest` (a
+  permission ask for observability we don't otherwise need); leaving the
+  default (verdicts about the wrong bytes). The hardcoded list can drift
+  from future Chrome defaults; revisit if Chrome's image Accept changes.
+
+### Hung loads and fetches are bounded (10 s settle, 30 s fetch)
+
+- **What:** `imageSettled` resolves after 10 s even if neither `load` nor
+  `error` fired, and the byte fetch carries `AbortSignal.timeout(30_000)`.
+  Both settle listeners now unregister through one AbortController
+  (previously the un-fired half of the load/error pair leaked per
+  analysis).
+- **Why:** an image whose network request never settles held one of the
+  two analysis slots forever; two such images silently stopped all
+  scanning for the page view, with nothing logged.
+- **Rejected:** treating settle-timeout as failure (punishes slow but
+  legitimate loads — analysis can proceed with the currentSrc already
+  chosen); no fetch timeout (any tarpit URL permanently burns a slot).
+  Numbers are provisional like the other scheduling constants.
+
+### Same-value src writes are not identity changes
+
+- **What:** the MutationObserver requests `attributeOldValue`, and
+  `handleSrcChange` runs only when the attribute value actually changed.
+- **Why:** per the DOM spec, `setAttribute` queues a record even when the
+  value is identical — jQuery `.attr("src", url)` galleries and the
+  `img.src = img.src` reload idiom do this routinely. Each spurious record
+  stripped the badge and restarted the 250 ms dwell; a page rewriting src
+  faster than the dwell starved analysis forever.
+- **Rejected:** tracking last-analyzed URL per element (that is the
+  URL-keyed invalidation redesign, follow-up work — this guard is the
+  minimal per-record fix and stays correct under it).
+
+### Badges re-anchor on scroll (capture phase)
+
+- **What:** `document.addEventListener("scroll", scheduleSync, true)`
+  joins the sync triggers.
+- **Why:** document-coordinate anchoring makes plain window scrolling free
+  only for normal-flow images. position:fixed/sticky subtrees move
+  relative to the document on every scroll tick, and inner scrollers
+  (modals, chat panes, carousels) move their images without touching
+  `window.scrollY` — the stranded badge could sit over a different image
+  and misattribute a verdict. Capture phase because scroll doesn't bubble.
+- **Cost:** one rAF-coalesced sync pass per frame during active scrolling —
+  precisely the moments a re-anchor is needed. The accepted CSS-animation
+  gap from the 5.1 entry stands.
+
+### Verdicts for detached images are dropped; badge host self-heals
+
+- **What:** the pre-badge staleness guard now also checks
+  `image.isConnected`, and `ensureHost()` re-adopts all live badges into a
+  rebuilt host — with `syncBadges` calling it, so a page-removed host is
+  restored on the next layout event rather than the next fresh verdict.
+- **Why:** a verdict landing after its image was detached re-created a
+  ghost badge for an element no longer on screen; and a page tearing out
+  the overlay host (document.write, SPA root replacement) left every
+  cached badge parented to the detached shadow root — updated and
+  positioned forever, visible never. A regression vs the pre-5.1 render
+  path, which appended a fresh div per render.

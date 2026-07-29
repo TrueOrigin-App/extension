@@ -53,6 +53,12 @@ function ensureHost(): ShadowRoot {
   const style = document.createElement("style");
   style.textContent = BADGE_STYLE;
   shadowRoot.append(style);
+  // If the page tore out the previous host, every live badge is still
+  // parented to its detached shadow root — adopt them, or they would keep
+  // updating invisibly forever.
+  for (const badge of badges.values()) {
+    shadowRoot.append(badge);
+  }
 
   document.documentElement.append(host);
   return shadowRoot;
@@ -105,6 +111,11 @@ export function removeBadgeFor(image: HTMLImageElement): void {
 export function syncBadges(
   onImageRemoved?: (image: HTMLImageElement) => void,
 ): void {
+  if (badges.size === 0) return;
+  // A page removing the host is itself a DOM mutation, so sync runs right
+  // after — rebuilding here (which re-adopts the badges) restores the
+  // overlay on the next layout event instead of the next fresh verdict.
+  ensureHost();
   for (const [image, badge] of badges) {
     if (image.isConnected) {
       position(badge, image);
