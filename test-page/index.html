@@ -97,14 +97,28 @@
     <p>
       Inspect the <strong>service worker's</strong> network activity
       (chrome://extensions → TrueOrigin → “Inspect views: service worker” →
-      Network tab). Expected on a cold run: five trust-list fetches (<code
-        >verify.contentauthenticity.org</code
-      >
-      ×3, <code>raw.githubusercontent.com</code> ×2) plus the
-      <code>cai-manifests.adobe.com</code> fetch triggered by cloud.jpg. Within
-      24 h (warm cache): only the cloud.jpg manifest fetch. Nothing else — no
-      media bytes, no page URLs.
+      Network tab). What appears depends on two caches — the 24 h trust-list
+      cache and the worker's in-memory verdict cache, which lives until Chrome
+      stops the idle worker (~30 s):
     </p>
+    <ul>
+      <li>
+        <strong>Cold worker, cold trust cache</strong> (first run in 24 h): five
+        trust-list fetches (<code>verify.contentauthenticity.org</code> ×3,
+        <code>raw.githubusercontent.com</code> ×2) plus the
+        <code>cai-manifests.adobe.com</code> fetch triggered by cloud.jpg.
+      </li>
+      <li>
+        <strong>Cold worker, warm trust cache</strong> (within 24 h): only the
+        cloud.jpg manifest fetch.
+      </li>
+      <li>
+        <strong>Warm worker</strong> (reload within ~30 s of the last analysis):
+        possibly no requests at all — the task-5.2 verdict cache recognizes the
+        image bytes and skips re-analysis, including the manifest fetch.
+      </li>
+    </ul>
+    <p>In every tier, nothing else — no media bytes, no page URLs.</p>
     <p>
       In the <strong>page's</strong> network panel (task 5.2, double-fetch
       collapse): each fixture URL appears exactly twice — the render request

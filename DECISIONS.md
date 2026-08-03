@@ -1226,3 +1226,38 @@ existing layers.
   audit checklist adds the page-panel check (each fixture: one network
   request, one from-cache request) and `serve.mjs` logs one line per hit
   so the collapse is verifiable server-side too.
+
+## 2026-08-03 — Task 5.2 follow-ups (same PR): CI workflow, audit-text tiers
+
+### GitHub Actions CI: the checks become a merge gate
+
+- **What:** `.github/workflows/ci.yml` runs `npm ci`, typecheck,
+  `format:check`, the test suite, and the build on every pull request
+  and on pushes to main. Single job, Node 24 (current LTS), read-only
+  token.
+- **Why:** the egress allowlist and taxonomy tests only guard anything
+  when they run, and until now that relied on the CLAUDE.md
+  run-tests-before-done convention — discipline, not machinery. A
+  public repo whose privacy story is "audit the free tier yourself"
+  (plan.md §7) should also show its checks passing in public. The suite
+  is CI-clean by design: the WASM integration tests stub all network,
+  so no secrets and no egress are needed.
+- **Owner action noted:** a green check only gates merges once branch
+  protection requires it — that is a GitHub settings toggle, not repo
+  code; flip it after this PR's run appears.
+- **Rejected:** a Node version matrix (single dev toolchain; esbuild
+  output is what ships; a matrix adds minutes for no signal);
+  release/packaging automation (nothing to release until the store
+  listing, Phase 3).
+
+### Service-worker audit text describes all three cache tiers
+
+- **What:** the test page's worker-panel expectations now enumerate the
+  three warmth tiers — cold worker + cold trust cache (five trust
+  fetches + cloud.jpg's manifest fetch), cold worker within 24 h
+  (manifest fetch only), warm worker (possibly zero requests).
+- **Why:** the previous text promised the cloud.jpg manifest fetch on
+  every warm run — true before 5.2, falsified by the worker verdict
+  cache (a warm-worker reload serves cloud.jpg's verdict from the hash
+  cache and never re-analyzes). An audit checklist that mispredicts the
+  expected picture generates phantom regressions during the soak.
