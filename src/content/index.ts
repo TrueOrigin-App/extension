@@ -101,12 +101,21 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     return;
   }
 
-  const rect = image.getBoundingClientRect();
-  if (Math.min(rect.width, rect.height) < MIN_IMAGE_DIMENSION_PX) {
-    // Too small to be content. Forgotten rather than marked done, so an
-    // image that later grows past the threshold is reconsidered when it
-    // re-enters the viewport.
+  // Layout (border-box) size, not the transformed rect: it is what the
+  // page allocated to the image (transforms are usually transient
+  // animation), and it is the same metric the ResizeObserver below
+  // reports — gating on the visual rect would make a persistently
+  // scaled-down image revive, re-fail, and loop forever.
+  if (
+    Math.min(image.offsetWidth, image.offsetHeight) < MIN_IMAGE_DIMENSION_PX
+  ) {
+    // Too small to be content. Forgotten rather than marked done, and
+    // watched for growth: an already-intersecting image never receives
+    // another IntersectionObserver entry, so in-place growth (placeholder
+    // hydrating, container expanding, display toggled on) must revive it
+    // through the ResizeObserver.
     scheduler.reset(image);
+    resizeObserver.observe(image);
     return;
   }
 
@@ -203,6 +212,7 @@ function untrack(image: HTMLImageElement): void {
   generations.set(image, generationOf(image) + 1);
   scheduler.reset(image);
   intersectionObserver.unobserve(image);
+  resizeObserver.unobserve(image);
 }
 
 /** The image's displayed source changed identity: any badge or scan state
@@ -211,12 +221,34 @@ function invalidateScan(image: HTMLImageElement): void {
   generations.set(image, generationOf(image) + 1);
   removeBadgeFor(image);
   scheduler.reset(image);
+  // The fresh cycle re-gates and re-registers for growth if still small.
+  resizeObserver.unobserve(image);
   // Re-observing always yields a fresh entry, so a visible image re-enters
   // the scheduler immediately instead of waiting for a threshold crossing —
   // and for a never-observed image this is simply observe().
   intersectionObserver.unobserve(image);
   intersectionObserver.observe(image);
 }
+
+// Revival channel for images the min-size gate skipped. Observation starts
+// only at the gate and ends at the first grown entry (or any
+// untrack/invalidation), so the initial entry a fresh observe() delivers —
+// which reports the same too-small size the gate just measured — never
+// revives, and a revival fires once per gating.
+const resizeObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    const image = entry.target as HTMLImageElement;
+    const box = entry.borderBoxSize[0];
+    if (
+      !box ||
+      Math.min(box.inlineSize, box.blockSize) < MIN_IMAGE_DIMENSION_PX
+    ) {
+      continue;
+    }
+    resizeObserver.unobserve(image);
+    invalidateScan(image);
+  }
+});
 
 // Layout sync: badges are positioned in document coordinates, so plain
 // window scrolling over normal-flow content is free. Everything else that

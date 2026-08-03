@@ -1053,3 +1053,34 @@ displays that URL.**
 - The syncBadges disconnected-image path stays as a backstop for
   removals that never produced a record (e.g. nodes detached before the
   observer started).
+
+## 2026-07-28 — Min-size gate: layout metric + ResizeObserver revival
+
+- **What:** two coupled changes to the 64 px furniture gate. (1) It now
+  measures layout (border-box `offsetWidth`/`offsetHeight`) instead of
+  the transformed `getBoundingClientRect`. (2) A gated image is handed
+  to a shared ResizeObserver and revived (`invalidateScan`) the moment
+  its border-box crosses the threshold; observation ends at revival or
+  at any untrack/invalidation.
+- **Why (revival):** with `thresholds: [0]`, an already-intersecting
+  image never receives another IntersectionObserver entry, so in-place
+  growth — a lazy-load placeholder hydrating, a container expanding, a
+  hidden slide toggled visible — previously left the image unanalyzed
+  for the whole page view unless it fully left the 200 px margin and
+  came back.
+- **Why (metric):** ResizeObserver reports layout size and cannot see
+  transforms, so gating on the visual rect while reviving on layout
+  would loop forever on a persistently scaled-down image (revive →
+  re-fail → re-observe → initial entry ≥ threshold → revive …). Gating
+  on layout aligns the two metrics, which also makes the revival
+  self-limiting: the initial entry a fresh `observe()` delivers reports
+  the same too-small size the gate just measured, so it never revives.
+  Semantically, layout size is the space the page allocated to the
+  image — a scale-animated entrance (transform 0.2 → 1) is content and
+  now analyzes immediately instead of being permanently skipped, while
+  true furniture (icons, avatars) is small in layout too.
+- **Rejected:** keeping the rect gate plus remembering the gated size to
+  detect "real" growth (extra bookkeeping to preserve a metric whose
+  only distinct behavior — skipping transform-scaled content — was a
+  bug); a periodic re-measure loop (standing cost for an event the
+  platform will push to us).
