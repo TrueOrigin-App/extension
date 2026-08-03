@@ -19,6 +19,7 @@
     "@types/chrome": "^0.2.2",
     "@types/node": "^26.1.1",
     "esbuild": "^0.28.1",
+    "jsdom": "^27.0.1",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vitest": "^3.2.7"

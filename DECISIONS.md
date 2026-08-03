@@ -754,3 +754,377 @@ second, post-soak re-interview remains the authoritative one for Phase 3.
   contributor would have seen the cache as untracked. Rejected: ignoring
   `.impeccable/` wholesale, which would also swallow `config.json`, the
   shared config that is meant to be committed.
+
+## 2026-07-26 — Task 5.1: broad host access, viewport lazy scanning, scan scheduling
+
+### Owner decision (§8 ask, resolved before building): broad static access, both keys
+
+- **What:** `content_scripts.matches` and `host_permissions` both become
+  `["http://*/*", "https://*/*"]`. No `permissions` key; nothing optional.
+- **Evaluation presented (per the task-4 owner directive):**
+  - _Broad static, both keys_ (chosen): a broad `content_scripts` match alone
+    already triggers Chrome's maximal "read and change all your data on all
+    websites" install warning, so adding `host_permissions` costs nothing
+    further in warning terms while immediately granting the service worker
+    cross-origin fetch — which fixes the known strict-CORS remote-manifest
+    caveat now and unblocks 5.5's CORS fallbacks and 5.2's double-fetch
+    collapse. Since Chrome 127, users can downgrade any extension to
+    per-site/on-click access in browser UI, so opt-down exists without us
+    building opt-in machinery.
+  - _Broad scripts, defer host_permissions to 5.5_ (rejected): identical
+    install warning, so the deferral reduces capability without reducing
+    scariness.
+  - _Optional host permissions_ (rejected): `optional_host_permissions` +
+    `scripting` + runtime-registered content scripts would minimize the
+    install warning, but the extension would do nothing passively until the
+    user grants access through UI that only exists after the popup task
+    (5.3) — the core promise (verdicts as you browse) would become
+    conditional. Revisitable later as a "minimal footprint" mode without
+    architectural change.
+- **Scope detail:** `http/https` only, deliberately not `<all_urls>` —
+  `file:` is gated behind a user toggle anyway and `ftp:` is dead; narrower
+  is honest. The manifest test pins both keys to exactly this scope.
+
+### Viewport scanning: IntersectionObserver + DOM discovery split
+
+- **What:** discovery and analysis are separate. All light-DOM `<img>`
+  elements are _discovered_ (initial pass over `document.images`, then a
+  MutationObserver for added subtrees and `src`/`srcset` attribute changes)
+  and handed to one IntersectionObserver (`rootMargin: 200px` lookahead).
+  Images authored inside shadow roots are not discovered — none of the
+  discovery entry points pierce shadow boundaries (still-open list at the
+  end of this entry). Only images that
+  actually intersect are fed to the scheduler — discovery observes, it never
+  analyzes, keeping §4's "no full-page sweeps" true on dynamic pages.
+- **Src swaps are identity changes:** a `src`/`srcset` mutation removes any
+  existing badge immediately (a badge for the old bytes is a false claim),
+  forgets the element's scan state, and re-observes it (re-`observe()`
+  always emits a fresh entry, so a visible swapped image re-queues without
+  waiting for a threshold crossing). A verdict that arrives after the image
+  it described was swapped is discarded by a URL recheck before badging.
+- **Rejected:** analyzing on discovery (full-page sweep, exactly what §4
+  forbids); polling `document.images` (misses nothing but burns CPU;
+  MutationObserver is the platform's push channel for this).
+
+### Scan scheduling: dwell debounce + bounded concurrency (`scheduler.ts`)
+
+- **What:** a DOM-free `ScanScheduler` (unit-tested with fake timers) with
+  per-item lifecycle: entering the viewport starts a **250 ms dwell**;
+  leaving before it elapses cancels at zero cost (this is the §4 "debounce
+  viewport churn" requirement — fast scrolling analyzes nothing). Dwelled
+  items queue through a concurrency gate of **2** in-flight analyses;
+  leaving the viewport while queued dequeues, while running lets the
+  analysis finish (the work is paid for; the verdict stays useful). Completed
+  items never re-analyze this page view; failures are likewise terminal for
+  the page view (retry policy belongs with verdict caching, 5.2).
+- **Numbers (provisional):** 250 ms dwell ≈ below-perception delay but
+  enough for flick-scrolling to skip past; concurrency 2 because the WASM
+  validator serializes in the worker anyway — the overlap only hides
+  fetch/encode latency; 200 px lookahead pre-warms near-viewport images
+  without scanning the whole page. Revisit all three against daily-driver
+  feel (§6 cadence note).
+- **Min-size gate:** images under **64 px** on their short side are skipped
+  (icons, avatars, spacers — the badge itself would outsize them). Skipped
+  images are forgotten, not marked done, so one that grows past the
+  threshold is reconsidered on viewport re-entry. Threshold provisional.
+- **In-flight URL coalescing was considered and deferred:** duplicate
+  same-URL images analyze independently this session; the URL-keyed cache
+  (5.2) subsumes coalescing properly. Recorded so 5.2 picks it up.
+
+### Badge lifecycle: keyed per image, event-driven re-anchoring
+
+- **What:** `badge.ts` now keeps one badge per image (a `Map`), so
+  re-analysis replaces rather than stacks. `syncBadges()` re-anchors every
+  badge to its image's current document coordinates, hides badges whose
+  image has a collapsed rect (hidden carousel slides), and removes badges
+  whose image left the document — also untracking the element so a
+  re-inserted image is scanned fresh. Sync runs rAF-coalesced on the events
+  that actually move layout: window resize, any DOM mutation batch,
+  capture-phase subresource `load` events (an image finishing its load
+  shifts everything below it with no mutation), and `document.fonts.ready`.
+- **Known gap (accepted):** pure CSS-driven movement with none of those
+  triggers (animations/transitions repositioning images) leaves a badge
+  stale until the next layout event. A continuous rAF loop would close it
+  at a standing battery cost; revisit only if daily-driver use surfaces it.
+- **Task-4 limitations now lifted:** one-shot scan (dynamic images are
+  discovered), no reposition on resize/layout shift (event-driven sync),
+  badge stacking on re-render (keyed). Still open by design: verdict
+  caching + double-fetch collapse (5.2), cross-origin byte acquisition
+  (5.5), `all_frames` (iframes unscanned — embedded content; needs its own
+  look at frame-flooding cost before enabling), shadow-DOM discovery
+  (images authored inside shadow roots are invisible to `document.images`,
+  the document-rooted MutationObserver, and `querySelectorAll` alike —
+  revisit after the daily-driver soak; Lit-based sites like Reddit are
+  the natural test).
+
+## 2026-07-28 — Task 5.1 review fixes (pre-merge batch)
+
+Fixes from the pre-merge review of PR #2; each closes a path to a false or
+stale badge, or to scanning silently stopping. Larger follow-ups the review
+also surfaced (URL-keyed badge invalidation, `removedNodes` handling,
+ResizeObserver revival for small-gated images, a DOM test environment) are
+deliberately not in this batch.
+
+### Analysis fetch pins Chrome's image Accept header
+
+- **What:** the byte-acquisition `fetch` sends the same `Accept` list
+  Chrome sends for `<img>` requests instead of the default `*/*`.
+- **Why:** on `Vary: Accept` content-negotiating CDNs (Cloudflare Polish,
+  Vercel image optimization, Cloudinary `f_auto`, …) `*/*` can be served a
+  different representation than the page displayed — e.g. the signed
+  original while the user sees an unsigned transcode, and transcoding is
+  exactly what strips C2PA. The verdict must describe the bytes on screen.
+- **Rejected:** reading the actual request header via `webRequest` (a
+  permission ask for observability we don't otherwise need); leaving the
+  default (verdicts about the wrong bytes). The hardcoded list can drift
+  from future Chrome defaults; revisit if Chrome's image Accept changes.
+
+### Hung loads and fetches are bounded (10 s settle, 30 s fetch)
+
+- **What:** `imageSettled` resolves after 10 s even if neither `load` nor
+  `error` fired, and the byte fetch carries `AbortSignal.timeout(30_000)`.
+  Both settle listeners now unregister through one AbortController
+  (previously the un-fired half of the load/error pair leaked per
+  analysis).
+- **Why:** an image whose network request never settles held one of the
+  two analysis slots forever; two such images silently stopped all
+  scanning for the page view, with nothing logged.
+- **Rejected:** treating settle-timeout as failure (punishes slow but
+  legitimate loads — analysis can proceed with the currentSrc already
+  chosen); no fetch timeout (any tarpit URL permanently burns a slot).
+  Numbers are provisional like the other scheduling constants.
+
+### Same-value src writes are not identity changes
+
+- **What:** the MutationObserver requests `attributeOldValue`, and
+  `handleSrcChange` runs only when the attribute value actually changed.
+- **Why:** per the DOM spec, `setAttribute` queues a record even when the
+  value is identical — jQuery `.attr("src", url)` galleries and the
+  `img.src = img.src` reload idiom do this routinely. Each spurious record
+  stripped the badge and restarted the 250 ms dwell; a page rewriting src
+  faster than the dwell starved analysis forever.
+- **Rejected:** tracking last-analyzed URL per element (that is the
+  URL-keyed invalidation redesign, follow-up work — this guard is the
+  minimal per-record fix and stays correct under it).
+
+### Badges re-anchor on scroll (capture phase)
+
+- **What:** `document.addEventListener("scroll", scheduleSync, true)`
+  joins the sync triggers.
+- **Why:** document-coordinate anchoring makes plain window scrolling free
+  only for normal-flow images. position:fixed/sticky subtrees move
+  relative to the document on every scroll tick, and inner scrollers
+  (modals, chat panes, carousels) move their images without touching
+  `window.scrollY` — the stranded badge could sit over a different image
+  and misattribute a verdict. Capture phase because scroll doesn't bubble.
+- **Cost:** one rAF-coalesced sync pass per frame during active scrolling —
+  precisely the moments a re-anchor is needed. The accepted CSS-animation
+  gap from the 5.1 entry stands.
+
+### Verdicts for detached images are dropped; badge host self-heals
+
+- **What:** the pre-badge staleness guard now also checks
+  `image.isConnected`, and `ensureHost()` re-adopts all live badges into a
+  rebuilt host — with `syncBadges` calling it, so a page-removed host is
+  restored on the next layout event rather than the next fresh verdict.
+- **Why:** a verdict landing after its image was detached re-created a
+  ghost badge for an element no longer on screen; and a page tearing out
+  the overlay host (document.write, SPA root replacement) left every
+  cached badge parented to the detached shadow root — updated and
+  positioned forever, visible never. A regression vs the pre-5.1 render
+  path, which appended a fresh div per render.
+
+## 2026-07-28 — URL-keyed badge invalidation and scan generations
+
+Second review batch: one design change replaces per-symptom patches for
+the remaining false-claim findings. The invariant it adds: **a badge is a
+claim about a specific URL, and it survives only while the image still
+displays that URL.**
+
+### Badges carry the URL they describe; sync enforces the match
+
+- **What:** `renderBadge` records the analyzed URL with each badge, and
+  `syncBadges` removes any badge whose image's live `currentSrc` no
+  longer matches, invoking a new `onImageStale` callback so the content
+  script re-queues the image (`invalidateScan`).
+- **Why:** element-keyed state cannot see same-element representation
+  changes. Responsive `srcset` re-selection (window resize, DPR change)
+  and `<picture>` source selection swap the displayed bytes with **no
+  mutation record on the img** — previously the badge silently kept
+  asserting a verdict about bytes no longer on screen, and a mid-analysis
+  swap on this path marked the element "done", unbadged forever.
+- **Rejected:** patching each symptom separately (three patches, and the
+  next unforeseen identity path would lie again — the URL recheck is a
+  backstop for all of them); a ResizeObserver on badged images (detects
+  layout, not representation, and misses DPR-only changes).
+- 5.2 note: the verdict cache should key on this same analyzed-URL
+  identity, and its cache hits will absorb the rescan cost of spurious
+  invalidations.
+
+### `<picture>` mutations invalidate the sibling `<img>`
+
+- **What:** attribute records on `<source>` children (`srcset`, `sizes`,
+  `media`, `type`) and `<source>` add/remove (childList on the
+  `<picture>`) invalidate the enclosing picture's `<img>`. `sizes` joins
+  `src`/`srcset` as identity attributes on `<img>` itself.
+- **Why:** the sync-time URL recheck only protects _badged_ images; an
+  unbadged image (failed analysis, or one still dwelling) also needs
+  source changes to reset its state, exactly as `src` writes already do.
+- **Unconditional by design:** whether the mutation actually changed
+  selection is unknowable at record time (the browser re-runs selection
+  asynchronously), and a spurious rescan is the safe direction — the
+  false-claim direction is not.
+
+### Scan generations close the stale-run race
+
+- **What:** a per-element generation counter (WeakMap). Every
+  invalidation (`invalidateScan`, `untrack`) bumps it; `analyzeImage`
+  captures the generation at start and re-checks after every await —
+  a run whose generation is stale returns without touching scheduler
+  state or badges. The post-analysis URL mismatch (current generation,
+  changed URL) is the one case where the run itself invalidates: it
+  means re-selection happened with no record, so nothing else re-queued
+  the element.
+- **Why:** the review confirmed a stale run's unconditional
+  `scheduler.reset` could cancel the fresh dwell a src swap had just
+  queued. Ownership-by-generation makes stale runs inert instead of
+  destructive, and it is precisely the guard that lets the mid-analysis
+  invalidation above exist (a blind reset there would clobber the fresh
+  cycle a mutation already queued).
+- **Rejected:** threading an AbortSignal into `analyzeImage` (stops
+  wasted fetch work too, but is a larger change with the same
+  correctness result — worth revisiting with 5.2, where an aborted run
+  should also skip cache writes); run tokens inside `ScanScheduler`
+  (the scheduler stays DOM-free and identity-blind; the content script
+  owns element identity).
+
+### All attributes observed (attributeFilter dropped)
+
+- **What:** the MutationObserver now observes every attribute
+  (`attributeOldValue` retained; the same-value guard from the previous
+  batch still gates identity handling).
+- **Why:** two consumers need records the old
+  `["src", "srcset"]` filter suppressed: identity handling
+  (`sizes` on `<img>`; `srcset`/`sizes`/`media`/`type` on `<source>`)
+  and badge sync — class/style toggles are how carousels and tabs hide
+  slides, and without a record the stale badge of a hidden slide kept
+  painting over the shared box of the newly shown one (verdict
+  misattribution), while a revealed slide's badge stayed hidden.
+- **Cost accepted:** per-record work is an instanceof plus a Set lookup;
+  sync is rAF-coalesced and returns immediately on pages with no badges.
+  Side effect: style-attribute-driven movement (animation libraries
+  writing inline styles) now re-anchors badges — the accepted CSS gap
+  narrows to stylesheet-driven animations/transitions only.
+
+### Rode along: `tracked` WeakSet deleted; syncBadges read/write split
+
+- The review proved `tracked` a bijective mirror of the observer's own
+  `[[ObservationTargets]]` (`observe`/`unobserve` are spec-idempotent),
+  with the `handleSrcChange` untracked branch unreachable and equivalent
+  to the fall-through. `track()` is now bare `observe()`;
+  `handleSrcChange` is subsumed by `invalidateScan` with one
+  unconditional body.
+- `syncBadges` batches all `getBoundingClientRect` reads before the
+  first style write: one forced layout flush per pass instead of one per
+  moving badge.
+
+## 2026-07-28 — Removed images are untracked at the mutation, not the badge
+
+- **What:** the MutationObserver's childList branch walks `removedNodes`
+  symmetrically with `addedNodes`: every disconnected `<img>` (including
+  those inside a removed subtree) is untracked — generation bump,
+  scheduler reset, unobserve. A node still connected when the callback
+  runs was _moved_ in the same task, not removed, and keeps its scan
+  state and badge.
+- **Why:** removal was previously only noticed for **badged** images
+  (via the syncBadges reap path). A removed image that failed analysis
+  or never earned a badge stayed in the scheduler's states Map for the
+  page lifetime — retaining the detached element — and a recycled
+  element re-inserted by a virtualized list was never scanned again
+  (`states.has` short-circuits `enter()`), contradicting the
+  scanned-fresh-on-reinsertion contract.
+- **Rejected:** WeakMap-keyed scheduler state. Mechanically possible
+  (states/dwellTimers are pure keyed access), but it forces
+  `T extends object` and breaks the scheduler's string-item unit tests,
+  still leaves the transient queue array holding strong refs, and hides
+  the lifecycle bug rather than fixing it — the element would become
+  collectable yet remain unscannable on re-insertion. Deterministic
+  untracking fixes the leak and the rescan hole together.
+- The syncBadges disconnected-image path stays as a backstop for
+  removals that never produced a record (e.g. nodes detached before the
+  observer started).
+
+## 2026-07-28 — Min-size gate: layout metric + ResizeObserver revival
+
+- **What:** two coupled changes to the 64 px furniture gate. (1) It now
+  measures layout (border-box `offsetWidth`/`offsetHeight`) instead of
+  the transformed `getBoundingClientRect`. (2) A gated image is handed
+  to a shared ResizeObserver and revived (`invalidateScan`) the moment
+  its border-box crosses the threshold; observation ends at revival or
+  at any untrack/invalidation.
+- **Why (revival):** with `thresholds: [0]`, an already-intersecting
+  image never receives another IntersectionObserver entry, so in-place
+  growth — a lazy-load placeholder hydrating, a container expanding, a
+  hidden slide toggled visible — previously left the image unanalyzed
+  for the whole page view unless it fully left the 200 px margin and
+  came back.
+- **Why (metric):** ResizeObserver reports layout size and cannot see
+  transforms, so gating on the visual rect while reviving on layout
+  would loop forever on a persistently scaled-down image (revive →
+  re-fail → re-observe → initial entry ≥ threshold → revive …). Gating
+  on layout aligns the two metrics, which also makes the revival
+  self-limiting: the initial entry a fresh `observe()` delivers reports
+  the same too-small size the gate just measured, so it never revives.
+  Semantically, layout size is the space the page allocated to the
+  image — a scale-animated entrance (transform 0.2 → 1) is content and
+  now analyzes immediately instead of being permanently skipped, while
+  true furniture (icons, avatars) is small in layout too.
+- **Rejected:** keeping the rect gate plus remembering the gated size to
+  detect "real" growth (extra bookkeeping to preserve a metric whose
+  only distinct behavior — skipping transform-scaled content — was a
+  bug); a periodic re-measure loop (standing cost for an event the
+  platform will push to us).
+
+## 2026-07-28 — DOM test environment (jsdom) and lifecycle tests
+
+- **What:** `jsdom` added as a dev dependency; `badge.test.ts` runs
+  under a per-file `@vitest-environment jsdom` pragma while the default
+  stays node (the scheduler and pipeline tests are DOM-free and fast).
+  New coverage: the badge lifecycle (keying and replacement,
+  positioning, collapsed-rect hiding, removed-image reaping, stale-URL
+  dropping, host-rebuild re-adoption, fresh-attach after removal) and
+  two scheduler contracts the review found unpinned — a stale run
+  finishing after `reset()` must not re-mark the item done, and
+  `leave()` while running lets the analysis finish and frees the slot.
+  The test helper's handle map is now keyed per call rather than per
+  item; the review showed the old shape resolved the fresh run instead
+  of the stale one, making the reset test's core assertion pass even
+  with the guard deleted. Both new pins were mutation-checked: removing
+  the `finally` guard fails the stale-run test, and dropping
+  `badges.delete` in `removeBadgeFor` fails the removal test.
+- **Why:** the review demonstrated the entire DOM-side lifecycle was
+  unfalsifiable — `npm test` stayed green under deliberate breakage.
+  CLAUDE.md's "run tests before declaring done" only means something if
+  the tests can fail.
+- **Rejected:** happy-dom (faster, but weaker fidelity on the shadow
+  DOM this code leans on); jsdom as the global default (environment
+  cost for the DOM-free majority of the suite).
+- **Limits (accepted):** jsdom has no layout, so rects are mocked, and
+  the IntersectionObserver / MutationObserver / ResizeObserver wiring
+  in index.ts stays untested — that is real-browser soak territory
+  (§6 cadence note).
+
+## 2026-07-28 — Design-hook exception: broken-image off for the content script
+
+- **What:** `.impeccable/config.json` gains a `detector.ignoreValues`
+  entry: rule `broken-image`, all values, scoped to
+  `src/content/index.ts` only.
+- **Why:** the rule pattern-matches the string `<img>` inside that
+  file's code comments — which necessarily discuss the elements the
+  script processes on host pages — and re-flagged every edit. The file
+  ships no markup, so there is no broken-image box to fix.
+- **Rejected:** `ignore-file` (silences every rule, including future
+  ones, for a file that may someday hold real findings); inline disable
+  comments (suppressions belong in one reviewable config place);
+  ignoring the rule project-wide (it must stay active for real UI
+  surfaces — the 5.3 popup ships actual `<img>` tags).
