@@ -10,19 +10,28 @@ function deferredAnalyze(): {
   fail: (item: string) => void;
 } {
   const started: string[] = [];
+  // Handles queue per call, not per item: when the same item runs twice
+  // (reset mid-flight), finish() settles the OLDEST unfinished run, so a
+  // stale run's completion is distinguishable from the fresh run's.
   const handles = new Map<
     string,
-    { resolve: () => void; reject: (error: Error) => void }
+    Array<{ resolve: () => void; reject: (error: Error) => void }>
   >();
   return {
     started,
     analyze: (item) =>
       new Promise<void>((resolve, reject) => {
         started.push(item);
-        handles.set(item, { resolve, reject });
+        const queue = handles.get(item) ?? [];
+        queue.push({ resolve, reject });
+        handles.set(item, queue);
       }),
-    finish: (item) => handles.get(item)?.resolve(),
-    fail: (item) => handles.get(item)?.reject(new Error(`failed: ${item}`)),
+    finish: (item) => handles.get(item)?.shift()?.resolve(),
+    fail: (item) =>
+      handles
+        .get(item)
+        ?.shift()
+        ?.reject(new Error(`failed: ${item}`)),
   };
 }
 
@@ -197,6 +206,57 @@ describe("ScanScheduler", () => {
     scheduler.enter("a");
     vi.advanceTimersByTime(DWELL_MS);
     expect(started).toEqual(["a", "a", "a"]);
+  });
+
+  it("a stale run finishing after reset() must not re-mark the item done", async () => {
+    const { analyze, started, finish } = deferredAnalyze();
+    const scheduler = new ScanScheduler({
+      dwellMs: DWELL_MS,
+      maxConcurrent: 1,
+      analyze,
+    });
+
+    scheduler.enter("a");
+    vi.advanceTimersByTime(DWELL_MS);
+    expect(started).toEqual(["a"]);
+
+    // Identity change mid-flight, then the stale run completes while the
+    // slate is clean. Its completion must leave the slate clean — an
+    // unconditional running→done stamp here would block re-entry forever.
+    scheduler.reset("a");
+    finish("a");
+    await settle();
+
+    scheduler.enter("a");
+    vi.advanceTimersByTime(DWELL_MS);
+    expect(started).toEqual(["a", "a"]);
+  });
+
+  it("leave() while running lets the analysis finish and frees the slot", async () => {
+    const { analyze, started, finish } = deferredAnalyze();
+    const scheduler = new ScanScheduler({
+      dwellMs: DWELL_MS,
+      maxConcurrent: 1,
+      analyze,
+    });
+
+    scheduler.enter("a");
+    vi.advanceTimersByTime(DWELL_MS);
+    expect(started).toEqual(["a"]);
+
+    // Leaving the viewport mid-analysis abandons nothing: the work is
+    // paid for, so the run completes and counts as done.
+    scheduler.leave("a");
+    finish("a");
+    await settle();
+
+    scheduler.enter("a");
+    vi.advanceTimersByTime(DWELL_MS * 10);
+    expect(started).toEqual(["a"]); // done, not forgotten
+
+    scheduler.enter("b");
+    vi.advanceTimersByTime(DWELL_MS);
+    expect(started).toEqual(["a", "b"]); // and the slot was released
   });
 
   it("reset() of a queued item frees its place in line", async () => {

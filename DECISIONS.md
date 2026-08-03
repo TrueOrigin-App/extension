@@ -1084,3 +1084,32 @@ displays that URL.**
   only distinct behavior — skipping transform-scaled content — was a
   bug); a periodic re-measure loop (standing cost for an event the
   platform will push to us).
+
+## 2026-07-28 — DOM test environment (jsdom) and lifecycle tests
+
+- **What:** `jsdom` added as a dev dependency; `badge.test.ts` runs
+  under a per-file `@vitest-environment jsdom` pragma while the default
+  stays node (the scheduler and pipeline tests are DOM-free and fast).
+  New coverage: the badge lifecycle (keying and replacement,
+  positioning, collapsed-rect hiding, removed-image reaping, stale-URL
+  dropping, host-rebuild re-adoption, fresh-attach after removal) and
+  two scheduler contracts the review found unpinned — a stale run
+  finishing after `reset()` must not re-mark the item done, and
+  `leave()` while running lets the analysis finish and frees the slot.
+  The test helper's handle map is now keyed per call rather than per
+  item; the review showed the old shape resolved the fresh run instead
+  of the stale one, making the reset test's core assertion pass even
+  with the guard deleted. Both new pins were mutation-checked: removing
+  the `finally` guard fails the stale-run test, and dropping
+  `badges.delete` in `removeBadgeFor` fails the removal test.
+- **Why:** the review demonstrated the entire DOM-side lifecycle was
+  unfalsifiable — `npm test` stayed green under deliberate breakage.
+  CLAUDE.md's "run tests before declaring done" only means something if
+  the tests can fail.
+- **Rejected:** happy-dom (faster, but weaker fidelity on the shadow
+  DOM this code leans on); jsdom as the global default (environment
+  cost for the DOM-free majority of the suite).
+- **Limits (accepted):** jsdom has no layout, so rects are mocked, and
+  the IntersectionObserver / MutationObserver / ResizeObserver wiring
+  in index.ts stays untested — that is real-browser soak territory
+  (§6 cadence note).
