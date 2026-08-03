@@ -933,3 +933,97 @@ deliberately not in this batch.
   cached badge parented to the detached shadow root — updated and
   positioned forever, visible never. A regression vs the pre-5.1 render
   path, which appended a fresh div per render.
+
+## 2026-07-28 — URL-keyed badge invalidation and scan generations
+
+Second review batch: one design change replaces per-symptom patches for
+the remaining false-claim findings. The invariant it adds: **a badge is a
+claim about a specific URL, and it survives only while the image still
+displays that URL.**
+
+### Badges carry the URL they describe; sync enforces the match
+
+- **What:** `renderBadge` records the analyzed URL with each badge, and
+  `syncBadges` removes any badge whose image's live `currentSrc` no
+  longer matches, invoking a new `onImageStale` callback so the content
+  script re-queues the image (`invalidateScan`).
+- **Why:** element-keyed state cannot see same-element representation
+  changes. Responsive `srcset` re-selection (window resize, DPR change)
+  and `<picture>` source selection swap the displayed bytes with **no
+  mutation record on the img** — previously the badge silently kept
+  asserting a verdict about bytes no longer on screen, and a mid-analysis
+  swap on this path marked the element "done", unbadged forever.
+- **Rejected:** patching each symptom separately (three patches, and the
+  next unforeseen identity path would lie again — the URL recheck is a
+  backstop for all of them); a ResizeObserver on badged images (detects
+  layout, not representation, and misses DPR-only changes).
+- 5.2 note: the verdict cache should key on this same analyzed-URL
+  identity, and its cache hits will absorb the rescan cost of spurious
+  invalidations.
+
+### `<picture>` mutations invalidate the sibling `<img>`
+
+- **What:** attribute records on `<source>` children (`srcset`, `sizes`,
+  `media`, `type`) and `<source>` add/remove (childList on the
+  `<picture>`) invalidate the enclosing picture's `<img>`. `sizes` joins
+  `src`/`srcset` as identity attributes on `<img>` itself.
+- **Why:** the sync-time URL recheck only protects _badged_ images; an
+  unbadged image (failed analysis, or one still dwelling) also needs
+  source changes to reset its state, exactly as `src` writes already do.
+- **Unconditional by design:** whether the mutation actually changed
+  selection is unknowable at record time (the browser re-runs selection
+  asynchronously), and a spurious rescan is the safe direction — the
+  false-claim direction is not.
+
+### Scan generations close the stale-run race
+
+- **What:** a per-element generation counter (WeakMap). Every
+  invalidation (`invalidateScan`, `untrack`) bumps it; `analyzeImage`
+  captures the generation at start and re-checks after every await —
+  a run whose generation is stale returns without touching scheduler
+  state or badges. The post-analysis URL mismatch (current generation,
+  changed URL) is the one case where the run itself invalidates: it
+  means re-selection happened with no record, so nothing else re-queued
+  the element.
+- **Why:** the review confirmed a stale run's unconditional
+  `scheduler.reset` could cancel the fresh dwell a src swap had just
+  queued. Ownership-by-generation makes stale runs inert instead of
+  destructive, and it is precisely the guard that lets the mid-analysis
+  invalidation above exist (a blind reset there would clobber the fresh
+  cycle a mutation already queued).
+- **Rejected:** threading an AbortSignal into `analyzeImage` (stops
+  wasted fetch work too, but is a larger change with the same
+  correctness result — worth revisiting with 5.2, where an aborted run
+  should also skip cache writes); run tokens inside `ScanScheduler`
+  (the scheduler stays DOM-free and identity-blind; the content script
+  owns element identity).
+
+### All attributes observed (attributeFilter dropped)
+
+- **What:** the MutationObserver now observes every attribute
+  (`attributeOldValue` retained; the same-value guard from the previous
+  batch still gates identity handling).
+- **Why:** two consumers need records the old
+  `["src", "srcset"]` filter suppressed: identity handling
+  (`sizes` on `<img>`; `srcset`/`sizes`/`media`/`type` on `<source>`)
+  and badge sync — class/style toggles are how carousels and tabs hide
+  slides, and without a record the stale badge of a hidden slide kept
+  painting over the shared box of the newly shown one (verdict
+  misattribution), while a revealed slide's badge stayed hidden.
+- **Cost accepted:** per-record work is an instanceof plus a Set lookup;
+  sync is rAF-coalesced and returns immediately on pages with no badges.
+  Side effect: style-attribute-driven movement (animation libraries
+  writing inline styles) now re-anchors badges — the accepted CSS gap
+  narrows to stylesheet-driven animations/transitions only.
+
+### Rode along: `tracked` WeakSet deleted; syncBadges read/write split
+
+- The review proved `tracked` a bijective mirror of the observer's own
+  `[[ObservationTargets]]` (`observe`/`unobserve` are spec-idempotent),
+  with the `handleSrcChange` untracked branch unreachable and equivalent
+  to the fall-through. `track()` is now bare `observe()`;
+  `handleSrcChange` is subsumed by `invalidateScan` with one
+  unconditional body.
+- `syncBadges` batches all `getBoundingClientRect` reads before the
+  first style write: one forced layout flush per pass instead of one per
+  moving badge.

@@ -38,6 +38,16 @@ const FETCH_TIMEOUT_MS = 30_000;
 const IMAGE_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
+// Attribute writes that change which bytes an <img> displays — on the img
+// itself, and on <source> children of its enclosing <picture>.
+const IMG_IDENTITY_ATTRIBUTES = new Set(["src", "srcset", "sizes"]);
+const SOURCE_IDENTITY_ATTRIBUTES = new Set([
+  "srcset",
+  "sizes",
+  "media",
+  "type",
+]);
+
 /** Fallback MIME detection for servers that omit Content-Type. */
 const EXTENSION_MIME_TYPES: Record<string, string> = {
   jpg: "image/jpeg",
@@ -76,7 +86,12 @@ function imageSettled(image: HTMLImageElement): Promise<void> {
 }
 
 async function analyzeImage(image: HTMLImageElement): Promise<void> {
+  // Ownership: this run acts for the element's current generation. Any
+  // invalidation (src swap, <picture> change, removal) bumps it, at which
+  // point this run must touch nothing — the newer cycle owns the state.
+  const generation = generationOf(image);
   await imageSettled(image);
+  if (generationOf(image) !== generation) return;
 
   const url = image.currentSrc || image.src;
   if (!url) {
@@ -120,17 +135,25 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     throw new Error(`analysis failed: ${result.error}`);
   }
 
-  if (!image.isConnected || (image.currentSrc || image.src) !== url) {
-    // The image left the document or swapped sources mid-analysis; this
-    // verdict describes bytes no longer on screen. (A swap's mutation
-    // record has already re-queued the element.)
+  if (generationOf(image) !== generation || !image.isConnected) {
+    // Invalidated or removed mid-analysis; whatever re-queued or reaped
+    // the element owns its state now — this verdict describes bytes no
+    // longer on screen.
+    return;
+  }
+  if ((image.currentSrc || image.src) !== url) {
+    // The displayed source changed with no mutation record and no
+    // invalidation — responsive srcset re-selection (resize, DPR change).
+    // Nothing else has re-queued the element, so do it here: this verdict
+    // is about bytes the image no longer shows.
+    invalidateScan(image);
     return;
   }
 
   // Full evidence in the console for now; the popup's progressive
   // disclosure (task 5.3) is the real home for this detail.
   console.info(LOG_PREFIX, url, result.verdict);
-  renderBadge(image, result.verdict.verdict);
+  renderBadge(image, result.verdict.verdict, url);
 }
 
 const scheduler = new ScanScheduler<HTMLImageElement>({
@@ -160,32 +183,37 @@ const intersectionObserver = new IntersectionObserver(
   { rootMargin: VIEWPORT_LOOKAHEAD },
 );
 
-/** Images currently under observation. */
-const tracked = new WeakSet<HTMLImageElement>();
+// Scan generations: every invalidation bumps an element's generation, and
+// an analysis run only acts on shared state (scheduler resets, badges)
+// while the generation it captured is still current. A run that lost
+// ownership mid-flight can never clobber the fresh cycle that replaced it.
+const generations = new WeakMap<HTMLImageElement, number>();
+
+function generationOf(image: HTMLImageElement): number {
+  return generations.get(image) ?? 0;
+}
 
 function track(image: HTMLImageElement): void {
-  if (tracked.has(image)) return;
-  tracked.add(image);
+  // observe() is spec-idempotent (re-observing an observed target is a
+  // no-op), so track() needs no bookkeeping to be safe to repeat.
   intersectionObserver.observe(image);
 }
 
 function untrack(image: HTMLImageElement): void {
-  tracked.delete(image);
+  generations.set(image, generationOf(image) + 1);
   scheduler.reset(image);
   intersectionObserver.unobserve(image);
 }
 
-/** An image's source changed: any existing badge now describes the wrong
- * bytes. Drop it and rescan as if the image were new. */
-function handleSrcChange(image: HTMLImageElement): void {
+/** The image's displayed source changed identity: any badge or scan state
+ * now describes the wrong bytes. Drop both and rescan as if new. */
+function invalidateScan(image: HTMLImageElement): void {
+  generations.set(image, generationOf(image) + 1);
   removeBadgeFor(image);
-  if (!tracked.has(image)) {
-    track(image);
-    return;
-  }
   scheduler.reset(image);
   // Re-observing always yields a fresh entry, so a visible image re-enters
-  // the scheduler immediately instead of waiting for a threshold crossing.
+  // the scheduler immediately instead of waiting for a threshold crossing —
+  // and for a never-observed image this is simply observe().
   intersectionObserver.unobserve(image);
   intersectionObserver.observe(image);
 }
@@ -203,7 +231,7 @@ function scheduleSync(): void {
   syncScheduled = true;
   requestAnimationFrame(() => {
     syncScheduled = false;
-    syncBadges(untrack);
+    syncBadges(untrack, invalidateScan);
   });
 }
 
@@ -217,17 +245,40 @@ const mutationObserver = new MutationObserver((records) => {
           track(image);
         }
       }
+      if (record.target instanceof HTMLPictureElement) {
+        // Adding or removing a <source> re-runs source selection for the
+        // sibling <img> without producing any record on the img itself.
+        const image = record.target.querySelector("img");
+        if (image) invalidateScan(image);
+      }
     } else if (
       record.target instanceof HTMLImageElement &&
+      IMG_IDENTITY_ATTRIBUTES.has(record.attributeName ?? "") &&
       record.target.getAttribute(record.attributeName ?? "") !== record.oldValue
     ) {
       // Only actual value changes are identity changes: setAttribute
       // queues a record even when the value is identical (jQuery .attr,
       // the `img.src = img.src` reload idiom), and reacting to those
       // would strip the badge and restart the dwell on every write.
-      handleSrcChange(record.target);
+      invalidateScan(record.target);
+    } else if (
+      record.target instanceof HTMLSourceElement &&
+      record.target.parentElement instanceof HTMLPictureElement &&
+      SOURCE_IDENTITY_ATTRIBUTES.has(record.attributeName ?? "") &&
+      record.target.getAttribute(record.attributeName ?? "") !== record.oldValue
+    ) {
+      // A <source> mutation can swap the sibling <img>'s currentSrc with
+      // no record on the img. Invalidate unconditionally: whether the
+      // selection actually changed is only knowable after the browser
+      // re-runs it, and a spurious rescan is the safe direction.
+      const image = record.target.parentElement.querySelector("img");
+      if (image) invalidateScan(image);
     }
   }
+  // Every record batch schedules a sync — including class/style toggles,
+  // which is how carousels and tabs hide slides: the sync pass is what
+  // hides, reveals, and re-anchors their badges (and its URL recheck
+  // catches identity changes none of the branches above can see).
   scheduleSync();
 });
 
@@ -236,11 +287,15 @@ function main(): void {
     track(image);
   }
 
+  // No attributeFilter: identity needs src/srcset/sizes on <img> plus
+  // srcset/sizes/media/type on <source>, and badge sync needs the
+  // class/style toggles pages use to show and hide images. Per-record
+  // cost is an instanceof plus a Set lookup; sync is rAF-coalesced and
+  // exits immediately on pages with no badges.
   mutationObserver.observe(document.documentElement, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["src", "srcset"],
     attributeOldValue: true,
   });
 
