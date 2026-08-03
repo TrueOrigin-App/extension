@@ -1,4 +1,4 @@
-// Zero-dependency static server for the task-4 test page. Serves the page
+// Zero-dependency static server for the checkpoint test page. Serves the page
 // itself plus the C2PA fixtures already vendored in the repo. Dev-only —
 // never part of the extension package.
 //
@@ -23,6 +23,9 @@ const FIXTURE_TYPES = new Map([
 
 const server = createServer(async (request, response) => {
   const path = new URL(request.url, "http://localhost").pathname;
+  // One line per hit, so the task-5.2 double-fetch collapse is checkable
+  // from the server side: one fixture request per page load, not two.
+  console.log(new Date().toISOString(), request.method, path);
 
   try {
     if (path === "/" || path === "/index.html") {

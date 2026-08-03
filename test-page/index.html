@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>TrueOrigin — task 4 test page</title>
+    <title>TrueOrigin — test page</title>
     <style>
       body {
         font:
@@ -80,6 +80,19 @@
       </figcaption>
     </figure>
 
+    <figure>
+      <img
+        src="/fixtures/ai_declared.png"
+        alt="AI-declared fixture, duplicate"
+      />
+      <figcaption>
+        <strong>ai_declared.png (duplicate)</strong> — same URL as the first
+        figure, for the task-5.2 verdict cache: it must badge
+        <em>AI — declared</em> from the shared analysis, with no extra fixture
+        request in the page network panel.
+      </figcaption>
+    </figure>
+
     <h2>Network-panel audit (plan.md §8, constraint 3)</h2>
     <p>
       Inspect the <strong>service worker's</strong> network activity
@@ -91,6 +104,14 @@
       <code>cai-manifests.adobe.com</code> fetch triggered by cloud.jpg. Within
       24 h (warm cache): only the cloud.jpg manifest fetch. Nothing else — no
       media bytes, no page URLs.
+    </p>
+    <p>
+      In the <strong>page's</strong> network panel (task 5.2, double-fetch
+      collapse): each fixture URL appears exactly twice — the render request
+      from the network, then the analysis fetch served from
+      <em>(disk cache)</em> / <em>(memory cache)</em>, never from the server.
+      The duplicate figure above adds no request of its own. The server logs one
+      hit per fixture per load.
     </p>
   </body>
 </html>

@@ -6,14 +6,23 @@
 //
 // Byte acquisition still happens here, in page context, with the page's own
 // origin privileges — so cross-origin images depend on permissive CORS until
-// the worker-side fallback lands (task 5.5). Verdict caching is task 5.2.
+// the worker-side fallback lands (task 5.5).
+//
+// Verdict caching (task 5.2): analyses are keyed by URL for the page view,
+// so duplicate images, spurious invalidations, and re-inserted elements
+// cost one analysis per URL — and the fetch itself runs force-cache, so
+// byte acquisition reads the bytes the render already downloaded instead
+// of hitting the network a second time. The worker keeps a second,
+// content-hash-keyed layer that outlives the page view.
 
 import {
   ANALYZE_MESSAGE_TYPE,
   encodeBytes,
   type AnalyzeRequest,
   type AnalyzeResponse,
+  type WireVerdict,
 } from "../messaging/protocol";
+import { CoalescingLruCache } from "../lib/coalescing-lru";
 import { removeBadgeFor, renderBadge, syncBadges } from "./badge";
 import { ScanScheduler } from "./scheduler";
 
@@ -37,6 +46,10 @@ const FETCH_TIMEOUT_MS = 30_000;
 // would describe an image the user never saw.
 const IMAGE_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+// Bound on the page-view verdict cache. Provisional: entries are one
+// WireVerdict each (manifest-store detail dominates), so this only guards
+// unbounded growth on infinite-scroll pages.
+const MAX_CACHED_VERDICTS = 200;
 
 // Attribute writes that change which bytes an <img> displays — on the img
 // itself, and on <source> children of its enclosing <picture>.
@@ -85,6 +98,56 @@ function imageSettled(image: HTMLImageElement): Promise<void> {
   });
 }
 
+// Page-view verdict cache, keyed by the analyzed URL — the same identity
+// badges carry (a badge is a claim about a specific URL). Duplicate images
+// share one in-flight analysis, and the rescan a spurious invalidation
+// triggers is absorbed as a cache hit. Verdicts with provider failures are
+// not retained (transient conditions must not stick); rejections are never
+// cached, so a URL that failed outright is retried when another element
+// (or a new invalidation cycle) asks for it.
+const verdictsByUrl = new CoalescingLruCache<WireVerdict>({
+  maxEntries: MAX_CACHED_VERDICTS,
+  retain: (verdict) => verdict.failures.length === 0,
+});
+
+/** Fetches the image bytes and runs them through the worker's pipeline.
+ * Element-independent by design: the result is a claim about the URL, so
+ * it stays valid — and cacheable — even if the element that wanted it was
+ * invalidated mid-flight. */
+async function fetchAndAnalyze(url: string): Promise<WireVerdict> {
+  const response = await fetch(url, {
+    headers: { accept: IMAGE_ACCEPT },
+    // force-cache reuses the HTTP-cache entry the render stored regardless
+    // of freshness — collapsing the render+analyze double fetch observed at
+    // the task-4 checkpoint, and guaranteeing the verdict describes the
+    // bytes on screen rather than a newer representation a revalidation
+    // could return. Content-script fetches share the page's cache
+    // partition, and the pinned Accept header keeps Vary: Accept matching.
+    cache: "force-cache",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`image fetch failed: HTTP ${response.status}`);
+  }
+  const blob = await response.blob();
+  const mimeType = mimeTypeFor(blob, response.url);
+  if (!mimeType) {
+    throw new Error("could not determine image MIME type");
+  }
+
+  const request: AnalyzeRequest = {
+    type: ANALYZE_MESSAGE_TYPE,
+    bytesBase64: encodeBytes(new Uint8Array(await blob.arrayBuffer())),
+    mimeType,
+    sourceUrl: url,
+  };
+  const result = (await chrome.runtime.sendMessage(request)) as AnalyzeResponse;
+  if (!result.ok) {
+    throw new Error(`analysis failed: ${result.error}`);
+  }
+  return result.verdict;
+}
+
 async function analyzeImage(image: HTMLImageElement): Promise<void> {
   // Ownership: this run acts for the element's current generation. Any
   // invalidation (src swap, <picture> change, removal) bumps it, at which
@@ -119,30 +182,12 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     return;
   }
 
-  const response = await fetch(url, {
-    headers: { accept: IMAGE_ACCEPT },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    throw new Error(`image fetch failed: HTTP ${response.status}`);
-  }
-  const blob = await response.blob();
-  const mimeType = mimeTypeFor(blob, response.url);
-  if (!mimeType) {
-    throw new Error("could not determine image MIME type");
-  }
-
-  const request: AnalyzeRequest = {
-    type: ANALYZE_MESSAGE_TYPE,
-    bytesBase64: encodeBytes(new Uint8Array(await blob.arrayBuffer())),
-    mimeType,
-    sourceUrl: url,
-  };
-  const result = (await chrome.runtime.sendMessage(request)) as AnalyzeResponse;
-
-  if (!result.ok) {
-    throw new Error(`analysis failed: ${result.error}`);
-  }
+  // data:/blob: URLs skip the URL cache: a data: URL as a Map key would
+  // retain the whole payload string, and the worker's content-hash layer
+  // dedupes their analysis anyway.
+  const verdict = url.startsWith("http")
+    ? await verdictsByUrl.getOrRun(url, () => fetchAndAnalyze(url))
+    : await fetchAndAnalyze(url);
 
   if (generationOf(image) !== generation || !image.isConnected) {
     // Invalidated or removed mid-analysis; whatever re-queued or reaped
@@ -161,8 +206,8 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
 
   // Full evidence in the console for now; the popup's progressive
   // disclosure (task 5.3) is the real home for this detail.
-  console.info(LOG_PREFIX, url, result.verdict);
-  renderBadge(image, result.verdict.verdict, url);
+  console.info(LOG_PREFIX, url, verdict);
+  renderBadge(image, verdict.verdict, url);
 }
 
 const scheduler = new ScanScheduler<HTMLImageElement>({
@@ -172,8 +217,11 @@ const scheduler = new ScanScheduler<HTMLImageElement>({
     analyzeImage(image).catch((thrown: unknown) => {
       // No badge on failure: a badge is a claim about the image, and a
       // failed check supports none — not even "Unknown", which the mapper
-      // reserves for checks that ran (plan.md §2). Failures are terminal
-      // for this page view; verdict caching (task 5.2) revisits retries.
+      // reserves for checks that ran (plan.md §2). Failures stay terminal
+      // for this element's page view (the dominant class — strict-CORS
+      // byte acquisition — is deterministic per URL, so in-view retries
+      // would loop), but they are never cached: another element with the
+      // same URL, or an identity invalidation, retries fresh.
       console.warn(LOG_PREFIX, "could not analyze", image.currentSrc, thrown);
     }),
 });
