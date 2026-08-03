@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/content/index.ts"
+        ],
+        "createdAt": "2026-08-03T21:12:59.004Z",
+        "reason": "Content script with no markup; its comments mention <img>/<source> elements it processes on host pages — user confirmed false positive"
+      }
+    ]
+  }
+}

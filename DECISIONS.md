@@ -1113,3 +1113,18 @@ displays that URL.**
   the IntersectionObserver / MutationObserver / ResizeObserver wiring
   in index.ts stays untested — that is real-browser soak territory
   (§6 cadence note).
+
+## 2026-07-28 — Design-hook exception: broken-image off for the content script
+
+- **What:** `.impeccable/config.json` gains a `detector.ignoreValues`
+  entry: rule `broken-image`, all values, scoped to
+  `src/content/index.ts` only.
+- **Why:** the rule pattern-matches the string `<img>` inside that
+  file's code comments — which necessarily discuss the elements the
+  script processes on host pages — and re-flagged every edit. The file
+  ships no markup, so there is no broken-image box to fix.
+- **Rejected:** `ignore-file` (silences every rule, including future
+  ones, for a file that may someday hold real findings); inline disable
+  comments (suppressions belong in one reviewable config place);
+  ignoring the rule project-wide (it must stay active for real UI
+  surfaces — the 5.3 popup ships actual `<img>` tags).
