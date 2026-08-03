@@ -245,6 +245,16 @@ const mutationObserver = new MutationObserver((records) => {
           track(image);
         }
       }
+      for (const node of record.removedNodes) {
+        // Still-connected means the node was moved in the same task, not
+        // removed (re-insertion happened before this microtask); moved
+        // images keep their scan state and badge.
+        if (!(node instanceof Element) || node.isConnected) continue;
+        if (node instanceof HTMLImageElement) untrack(node);
+        for (const image of node.querySelectorAll("img")) {
+          untrack(image);
+        }
+      }
       if (record.target instanceof HTMLPictureElement) {
         // Adding or removing a <source> re-runs source selection for the
         // sibling <img> without producing any record on the img itself.

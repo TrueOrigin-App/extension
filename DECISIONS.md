@@ -1027,3 +1027,29 @@ displays that URL.**
 - `syncBadges` batches all `getBoundingClientRect` reads before the
   first style write: one forced layout flush per pass instead of one per
   moving badge.
+
+## 2026-07-28 — Removed images are untracked at the mutation, not the badge
+
+- **What:** the MutationObserver's childList branch walks `removedNodes`
+  symmetrically with `addedNodes`: every disconnected `<img>` (including
+  those inside a removed subtree) is untracked — generation bump,
+  scheduler reset, unobserve. A node still connected when the callback
+  runs was _moved_ in the same task, not removed, and keeps its scan
+  state and badge.
+- **Why:** removal was previously only noticed for **badged** images
+  (via the syncBadges reap path). A removed image that failed analysis
+  or never earned a badge stayed in the scheduler's states Map for the
+  page lifetime — retaining the detached element — and a recycled
+  element re-inserted by a virtualized list was never scanned again
+  (`states.has` short-circuits `enter()`), contradicting the
+  scanned-fresh-on-reinsertion contract.
+- **Rejected:** WeakMap-keyed scheduler state. Mechanically possible
+  (states/dwellTimers are pure keyed access), but it forces
+  `T extends object` and breaks the scheduler's string-item unit tests,
+  still leaves the transient queue array holding strong refs, and hides
+  the lifecycle bug rather than fixing it — the element would become
+  collectable yet remain unscannable on re-insertion. Deterministic
+  untracking fixes the leak and the rescan hole together.
+- The syncBadges disconnected-image path stays as a backstop for
+  removals that never produced a record (e.g. nodes detached before the
+  observer started).
