@@ -6,11 +6,15 @@
 // serves the same image reached under a different URL, from another tab,
 // or after a page reload. sourceUrl is deliberately not part of the key.
 //
-// Only failure-free verdicts are retained: a verdict carrying provider
-// failures reflects a transient condition (WASM init failure, trust-list
-// fetch outage) that must not be replayed once the condition clears.
+// Retention is the shared isCacheableVerdict policy: only failure-free
+// verdicts are kept, so transient conditions (WASM init failure, trust-list
+// or remote-manifest outage) are never replayed after they clear.
 
-import type { MediaInput, Verdict } from "../core/types";
+import {
+  isCacheableVerdict,
+  type MediaInput,
+  type Verdict,
+} from "../core/types";
 import { CoalescingLruCache } from "../lib/coalescing-lru";
 
 // Provisional, like the other tuning constants: verdict objects are small
@@ -28,34 +32,15 @@ function toHex(buffer: ArrayBuffer): string {
  * because it is an analysis input — the reader parses the same bytes
  * differently under a different declared type. */
 export async function contentHashKey(input: MediaInput): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    // Copy into a fresh ArrayBuffer-backed view: digest() rejects views
-    // over SharedArrayBuffer, which Uint8Array's type admits.
-    new Uint8Array(input.bytes),
-  );
+  const digest = await crypto.subtle.digest("SHA-256", input.bytes);
   return `${input.mimeType}:${toHex(digest)}`;
 }
 
-export class VerdictCache {
-  private readonly cache = new CoalescingLruCache<Verdict>({
+/** The worker-lifetime verdict cache, preconfigured. A factory rather than
+ * a module-level instance so tests get isolated caches. */
+export function createVerdictCache(): CoalescingLruCache<Verdict> {
+  return new CoalescingLruCache<Verdict>({
     maxEntries: MAX_ENTRIES,
-    retain: (verdict) => verdict.failures.length === 0,
+    retain: isCacheableVerdict,
   });
-
-  /** Number of cached verdicts (test seam). */
-  get size(): number {
-    return this.cache.size;
-  }
-
-  /** Returns the cached verdict for this media, or runs analyze() and
-   * caches its result. Concurrent requests for the same bytes share one
-   * analysis. */
-  async analyze(
-    input: MediaInput,
-    run: (input: MediaInput) => Promise<Verdict>,
-  ): Promise<Verdict> {
-    const key = await contentHashKey(input);
-    return this.cache.getOrRun(key, () => run(input));
-  }
 }

@@ -76,6 +76,18 @@ describe("CoalescingLruCache", () => {
     expect(cache.size).toBe(1);
   });
 
+  it("delete() drops the settled entry so the key runs fresh", async () => {
+    const cache = new CoalescingLruCache<string>({ maxEntries: 10 });
+    await cache.getOrRun("a", async () => "old");
+
+    cache.delete("a");
+    expect(cache.size).toBe(0);
+
+    const rerun = vi.fn(async () => "new");
+    expect(await cache.getOrRun("a", rerun)).toBe("new");
+    expect(rerun).toHaveBeenCalledTimes(1);
+  });
+
   it("evicts the least recently used entry past maxEntries", async () => {
     const cache = new CoalescingLruCache<string>({ maxEntries: 2 });
     await cache.getOrRun("a", async () => "A");

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { MediaInput, Verdict } from "../core/types";
-import { VerdictCache, contentHashKey } from "./verdict-cache";
+import { contentHashKey, createVerdictCache } from "./verdict-cache";
 
 function input(overrides: Partial<MediaInput> = {}): MediaInput {
   return {
@@ -31,55 +31,21 @@ describe("contentHashKey", () => {
   });
 });
 
-describe("VerdictCache", () => {
-  it("analyzes identical bytes once, across different source URLs", async () => {
-    const cache = new VerdictCache();
-    const run = vi.fn(async () => verdict());
-
-    const first = await cache.analyze(input(), run);
-    const second = await cache.analyze(
-      input({ sourceUrl: "https://mirror.test/same-bytes.png" }),
-      run,
-    );
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(second).toBe(first);
-  });
-
-  it("analyzes different bytes separately", async () => {
-    const cache = new VerdictCache();
-    const run = vi.fn(async () => verdict());
-
-    await cache.analyze(input(), run);
-    await cache.analyze(input({ bytes: new Uint8Array([5, 6]) }), run);
-    expect(run).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache verdicts carrying provider failures", async () => {
-    const cache = new VerdictCache();
+// Coalescing, rejection, and eviction behavior is the primitive's and is
+// covered in coalescing-lru.test.ts; what this layer owns is the key shape
+// (above) and the retention wiring (below).
+describe("createVerdictCache", () => {
+  it("does not retain verdicts carrying provider failures", async () => {
+    const cache = createVerdictCache();
+    const key = await contentHashKey(input());
     const failed = verdict([{ providerId: "c2pa", error: new Error("init") }]);
-    const run = vi
-      .fn<(input: MediaInput) => Promise<Verdict>>()
-      .mockResolvedValueOnce(failed)
-      .mockResolvedValueOnce(verdict());
 
-    expect(await cache.analyze(input(), run)).toBe(failed);
+    expect(await cache.getOrRun(key, async () => failed)).toBe(failed);
     expect(cache.size).toBe(0);
 
     // The transient condition cleared; the retry result is cached.
-    expect((await cache.analyze(input(), run)).failures).toEqual([]);
-    expect(run).toHaveBeenCalledTimes(2);
+    const clean = verdict();
+    expect(await cache.getOrRun(key, async () => clean)).toBe(clean);
     expect(cache.size).toBe(1);
-  });
-
-  it("does not cache rejections", async () => {
-    const cache = new VerdictCache();
-    const run = vi
-      .fn<(input: MediaInput) => Promise<Verdict>>()
-      .mockRejectedValueOnce(new Error("undecodable"))
-      .mockResolvedValueOnce(verdict());
-
-    await expect(cache.analyze(input(), run)).rejects.toThrow("undecodable");
-    expect(await cache.analyze(input(), run)).toEqual(verdict());
-    expect(run).toHaveBeenCalledTimes(2);
   });
 });

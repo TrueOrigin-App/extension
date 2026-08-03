@@ -1261,3 +1261,143 @@ existing layers.
   cache (a warm-worker reload serves cloud.jpg's verdict from the hash
   cache and never re-analyzes). An audit checklist that mispredicts the
   expected picture generates phantom regressions during the soak.
+
+## 2026-08-03 — Task 5.2 code-review fixes (same PR)
+
+An adversarial review of this branch surfaced 13 verified findings; the
+confirmed ones are fixed here. Everything below is free-choice territory
+(no permission changes, no new dependencies, no SignalProvider /
+SignalResult changes, no user-facing wording).
+
+### Remote-manifest outages are provider failures (supersedes task 4)
+
+- **What:** `RemoteManifestFetch` errors no longer map to finding "none"
+  with detail reason `remote-manifest-unavailable`; the provider throws,
+  the aggregator records a `ProviderFailure`, and the reason leaves the
+  `C2paDetail` union.
+- **Why:** the task-4 framing ("the check ran; the referenced provenance
+  was unreachable — an absence, not a failure") predates verdict caching.
+  Under 5.2 both retention gates key on `failures` alone, so the absence
+  framing let a transient network blip be cached as a durable,
+  failure-free "unknown" for the worker's lifetime — contradicting this
+  PR's own retention policy. As a failure the verdict renders the same
+  Unknown badge but is never cached, so the next analysis retries the
+  fetch once the condition clears.
+- **Cost accepted:** a permanently missing remote manifest (durable 404)
+  is refetched on every analysis instead of cached — pre-5.2 parity.
+- **Popup note (5.3):** the outage stays disclosable; it now arrives as a
+  failure message (`C2PA read failed: … RemoteManifestFetch …`) instead
+  of a detail reason.
+
+### URL-cache soundness for bytes that rotate under a stable URL
+
+- **What:** two guards on `verdictsByUrl`. (1) The retain gate also
+  requires the analyzed response to be _pinnable_: a `no-store` response
+  (live images, webcams) can serve different bytes on every fetch, so its
+  verdict is good for exactly the analysis that produced it. (2)
+  `invalidateScan()` evicts the entry for the element's current URL, so
+  an identity invalidation re-fetches instead of replaying a verdict
+  about older bytes — usually straight from disk cache, with the worker's
+  hash layer still absorbing the WASM run when bytes are unchanged.
+- **Why:** the review demonstrated a same-URL rotating image keeping its
+  t0 badge for the whole page view (an "AI — declared" badge over an
+  unrelated later frame). This narrows the original 5.2 claim that
+  spurious invalidations are "absorbed as cache hits": duplicate-element
+  absorption — the dominant win — is unchanged, but invalidation-driven
+  rescans now pay one cheap refetch for honesty.
+
+### force-cache falls back past CORS-unusable cache entries
+
+- **What:** when the force-cache analysis fetch rejects with a
+  `TypeError`, it is retried once with `cache: "no-cache"`.
+- **Why:** Chrome's HTTP cache sits below the CORS layer
+  (crbug.com/409090): an entry stored by the no-cors `<img>` render on a
+  server that only emits `Access-Control-Allow-Origin` for Origin-bearing
+  requests (S3-style, no `Vary: Origin`) carries no CORS headers, and
+  force-cache serves it to the cors-mode analysis fetch as a
+  deterministic TypeError — where the pre-5.2 default-mode fetch would
+  have revalidated and succeeded. The fallback revalidates past the
+  unusable entry; its bytes may be newer than the render's (pre-5.2
+  behavior, accepted on this error path — the pinned bytes are unreadable
+  here by definition). Other TypeErrors (offline, DNS) fail the same way
+  twice, quickly.
+
+### No badge for images that are not rendering
+
+- **What:** after settle, an image with `complete && naturalWidth === 0`
+  (error event fired, or already broken) is skipped — forgotten, not
+  terminal, so a scroll re-entry re-checks cheaply.
+- **Why:** force-cache serves stale prior-session entries regardless of
+  freshness, so with the origin unreachable the render fails (alt text)
+  while the analysis succeeds against the old cached 200 — a provenance
+  badge for bytes the user cannot see. A badge is a claim about displayed
+  content. The residual risk of a missed badge on odd `naturalWidth`
+  behavior (edge-case SVGs) is accepted: a silent miss is the honest
+  direction, a false claim is not.
+
+### Analysis failures: retry budget instead of terminal (supersedes 5.1/5.2)
+
+- **What:** a rejected analysis no longer marks the element permanently
+  done. Each scan cycle (generation) has `MAX_ANALYSIS_ATTEMPTS = 2`: the
+  first failure forgets the element so a later viewport re-entry retries;
+  the last is terminal for the cycle. Success and invalidation reset the
+  budget.
+- **Why:** the 5.1 rationale for terminal failures (deterministic
+  strict-CORS failures would retry-loop) assumed unbounded retries; a
+  budget of 2 bounds a deterministic failure to one extra attempt while
+  letting transient failures heal on the next scroll pass. This matters
+  more after 5.2: URL coalescing shares one rejection across every
+  concurrently joined same-URL element, so a single transient 503
+  terminally un-badged _all_ copies — and the old comment's claim that
+  another same-URL element "retries fresh" was false for exactly those
+  coalesced elements.
+
+### blob: URLs join the URL cache
+
+- **What:** only `data:` URLs bypass `verdictsByUrl`; `blob:` URLs now
+  cache like http(s).
+- **Why:** the data: exclusion exists because the URL _is_ the payload (a
+  Map key would retain megabytes of string). A blob: URL is a short
+  opaque handle to content that is immutable for the handle's lifetime;
+  excluding it charged every duplicate element the full
+  fetch + base64 + IPC + hash cost for no benefit.
+
+### Mechanical cleanups from the review
+
+- `MediaInput.bytes` is now `Uint8Array<ArrayBuffer>` (a free-choice
+  shape): every producer decodes into a fresh plain buffer, and the
+  tighter type lets `contentHashKey` hash the bytes directly instead of
+  copying the full buffer per analysis just to satisfy `BufferSource`.
+- The two textually identical retain predicates collapsed into
+  `isCacheableVerdict` (`core/types.ts`) — structural on `failures`, so
+  one policy site types against both `Verdict` and `WireVerdict`.
+- `VerdictCache` (a single-caller class wrapper) is replaced by
+  `createVerdictCache()` returning a configured `CoalescingLruCache`;
+  the class added nothing beyond `contentHashKey` plus configuration.
+  Its tests that duplicated the primitive's suite were dropped; the
+  key-shape and retention-wiring tests remain.
+- `IMAGE_ACCEPT` and `mimeTypeFor` moved to `src/lib/image-accept.ts`:
+  task 5.5's worker-side fallback needs the identical Accept header for
+  the identical `Vary: Accept` reason, and a file-local constant invited
+  a drifting second copy. The pin's silent-drift failure mode (Chrome
+  revising its default header un-matches cached entries with no signal)
+  is now documented at the constant. The `.impeccable/config.json`
+  `broken-image` ignore extends to the new file — same
+  comments-mention-`<img>` false positive as content/index.ts.
+- `CoalescingLruCache.delete()` added for the invalidation eviction.
+- Test-page audit text: the worker-panel instructions now state the
+  observer effect (an open worker inspector pins the worker alive, so
+  the ~30 s teardown separating the tiers never happens while watching)
+  and give the close-wait-reopen recipe for reproducing the cold tiers.
+
+### Deferred review findings (recorded, intentionally not fixed here)
+
+- **Degraded verdicts still badge:** a failure-carrying verdict renders
+  Unknown and the element goes terminal, while both caches refuse to
+  retain it — the review called this two-layer policy incoherence
+  (largely pre-5.2). Whether a degraded check should badge at all, and
+  how failures split into deterministic vs transient classes, is 5.3
+  popup / Phase 3 wording territory; revisit alongside 5.5.
+- **Accept-header drift** has no code-level fix (Chrome's default is not
+  introspectable); mitigated by documentation at the constant and the
+  soak-time network audit.

@@ -152,16 +152,23 @@ describe("c2pa provider (real WASM)", () => {
     expect(detail.validationState).toBe("Valid");
   });
 
-  it("treats an unreachable remote manifest as absence, not failure", async () => {
+  it("reports an unreachable remote manifest as a provider failure", async () => {
     fetchHandler = async () => {
       throw new TypeError("Failed to fetch");
     };
-    const result = await provider.analyze(await fixtureInput("cloud.jpg"));
-    expect(result.finding).toBe("none");
-    expect(result.confidence).toBe(0);
-    expect((result.detail as C2paDetail).reason).toBe(
-      "remote-manifest-unavailable",
+    // Through the pipeline the outage becomes a ProviderFailure, which is
+    // what keeps the degraded verdict out of both verdict caches (the
+    // retention gates key on failures — a failure-free "unknown" here
+    // would be replayed long after the network recovered).
+    const verdict = await runPipeline(
+      [provider],
+      await fixtureInput("cloud.jpg"),
     );
+    expect(verdict.verdict).toBe("unknown");
+    expect(verdict.signals).toEqual([]);
+    expect(verdict.failures).toHaveLength(1);
+    expect(verdict.failures[0]!.providerId).toBe(C2PA_PROVIDER_ID);
+    expect(String(verdict.failures[0]!.error)).toContain("RemoteManifestFetch");
   });
 
   it("maps a real OpenAI-generated image to ai-declared", async () => {

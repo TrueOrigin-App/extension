@@ -7,7 +7,10 @@
 /** Media handed to providers for analysis. Free tier: these bytes and any
  * URL never leave the machine (plan.md §8, constraint 3). */
 export interface MediaInput {
-  bytes: Uint8Array;
+  /** Plain-ArrayBuffer-backed by contract: every producer decodes into a
+   * fresh buffer, and consumers (crypto.subtle.digest) reject
+   * SharedArrayBuffer-backed views at the type level. */
+  bytes: Uint8Array<ArrayBuffer>;
   mimeType: string;
   /** Where the media was loaded from, when known. Local use only (caching,
    * popup display) — never transmitted. */
@@ -63,6 +66,18 @@ export interface ProviderFailure {
 export interface AggregateEvidence {
   signals: SignalResult[];
   failures: ProviderFailure[];
+}
+
+/** The single retention policy both verdict-cache layers apply: only
+ * failure-free verdicts are cached. A verdict carrying provider failures
+ * reflects a transient condition (WASM init failure, trust-list or
+ * remote-manifest outage) that must not be replayed once it clears.
+ * Structural on `failures` so it types against both Verdict and the wire
+ * shape the content script caches. */
+export function isCacheableVerdict(verdict: {
+  failures: readonly unknown[];
+}): boolean {
+  return verdict.failures.length === 0;
 }
 
 /** Output of the verdict mapper: one verdict plus the supporting detail the

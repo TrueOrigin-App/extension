@@ -68,7 +68,7 @@ export function encodeBytes(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export function decodeBytes(base64: string): Uint8Array {
+export function decodeBytes(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {

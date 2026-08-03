@@ -33,6 +33,13 @@ export class CoalescingLruCache<V> {
     return this.settled.size;
   }
 
+  /** Drops the settled entry for a key, if any. An in-flight run is not
+   * affected: it may still be retained when it settles — a caller
+   * invalidating harder than that must gate on its own generations. */
+  delete(key: string): void {
+    this.settled.delete(key);
+  }
+
   getOrRun(key: string, run: () => Promise<V>): Promise<V> {
     if (this.settled.has(key)) {
       const value = this.settled.get(key) as V;
