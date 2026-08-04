@@ -7,10 +7,13 @@ import type { MediaInput, Verdict } from "../core/types";
 import {
   decodeBytes,
   isAnalyzeRequest,
+  isAnalyzeUrlRequest,
   toWireVerdict,
   type AnalyzeResponse,
+  type AnalyzeUrlResponse,
 } from "../messaging/protocol";
 import { activeProviders } from "../providers";
+import { fetchImageForAnalysis } from "./fetch-image";
 import { contentHashKey, createVerdictCache } from "./verdict-cache";
 
 // Content-hash-keyed verdict cache (task 5.2): repeated analyses of the
@@ -27,29 +30,57 @@ export async function analyzeMedia(input: MediaInput): Promise<Verdict> {
   return verdictCache.getOrRun(key, () => runPipeline(activeProviders, input));
 }
 
+function errorMessage(thrown: unknown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!isAnalyzeRequest(message)) return;
+  if (isAnalyzeRequest(message)) {
+    void (async (): Promise<AnalyzeResponse> => {
+      try {
+        const verdict = await analyzeMedia({
+          bytes: decodeBytes(message.bytesBase64),
+          mimeType: message.mimeType,
+          sourceUrl: message.sourceUrl,
+        });
+        return { ok: true, verdict: toWireVerdict(verdict) };
+      } catch (thrown) {
+        // The pipeline isolates provider failures, so reaching here means
+        // the request itself was unusable (e.g. undecodable bytes).
+        return { ok: false, error: errorMessage(thrown) };
+      }
+    })().then(sendResponse);
 
-  void (async (): Promise<AnalyzeResponse> => {
-    try {
-      const verdict = await analyzeMedia({
-        bytes: decodeBytes(message.bytesBase64),
-        mimeType: message.mimeType,
-        sourceUrl: message.sourceUrl,
-      });
-      return { ok: true, verdict: toWireVerdict(verdict) };
-    } catch (thrown) {
-      // The pipeline isolates provider failures, so reaching here means the
-      // request itself was unusable (e.g. undecodable bytes).
-      const error = thrown instanceof Error ? thrown.message : String(thrown);
-      return { ok: false, error };
-    }
-  })().then(sendResponse);
+    // Keep the message channel open for the async response. Chrome extends
+    // the worker's lifetime while the channel is pending, which covers the
+    // lazy WASM initialization on the first analysis.
+    return true;
+  }
 
-  // Keep the message channel open for the async response. Chrome extends
-  // the worker's lifetime while the channel is pending, which covers the
-  // lazy WASM initialization on the first analysis.
-  return true;
+  if (isAnalyzeUrlRequest(message)) {
+    // CORS fallback (task 5.5): acquire the bytes here, where host
+    // permissions apply, then run the same pipeline. Fetch policy and the
+    // constraint-3 story live in fetch-image.ts.
+    void (async (): Promise<AnalyzeUrlResponse> => {
+      try {
+        const { bytes, mimeType, pinned } = await fetchImageForAnalysis(
+          message.url,
+        );
+        const verdict = await analyzeMedia({
+          bytes,
+          mimeType,
+          sourceUrl: message.url,
+        });
+        return { ok: true, verdict: toWireVerdict(verdict), pinned };
+      } catch (thrown) {
+        return { ok: false, error: errorMessage(thrown) };
+      }
+    })().then(sendResponse);
+
+    return true;
+  }
+
+  return;
 });
 
 chrome.runtime.onInstalled.addListener(() => {

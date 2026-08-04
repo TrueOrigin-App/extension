@@ -21,11 +21,22 @@ const FIXTURE_TYPES = new Map([
   ["cloud.jpg", "image/jpeg"],
 ]);
 
+// This server deliberately sends no Access-Control-Allow-Origin header:
+// the page loads from localhost, so a fixture referenced via 127.0.0.1 (a
+// different origin) is a live strict-CORS case — in-page byte acquisition
+// must fail and the task-5.5 worker fallback must take over.
+
 const server = createServer(async (request, response) => {
   const path = new URL(request.url, "http://localhost").pathname;
-  // One line per hit, so the task-5.2 double-fetch collapse is checkable
-  // from the server side: one fixture request per page load, not two.
-  console.log(new Date().toISOString(), request.method, path);
+  // One line per hit, with the requested host so render (localhost),
+  // blocked in-page analysis attempts, and worker-fallback fetches
+  // (127.0.0.1) are tellable apart — the task-5.2 double-fetch collapse
+  // and the task-5.5 fallback are both checkable from the server side.
+  console.log(
+    new Date().toISOString(),
+    request.method,
+    `${request.headers.host ?? "?"}${path}`,
+  );
 
   try {
     if (path === "/" || path === "/index.html") {

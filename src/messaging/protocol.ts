@@ -26,6 +26,21 @@ export interface AnalyzeRequest {
   sourceUrl: string;
 }
 
+export const ANALYZE_URL_MESSAGE_TYPE = "trueorigin:analyze-url";
+
+/** Content script → service worker: fetch the image yourself, then analyze
+ * it (task 5.5). Used when in-page byte acquisition failed (strict-CORS
+ * hosts reject the page-context read even though the render displayed the
+ * image) or when the bytes exceed what the JSON message channel carries.
+ * The worker's host permissions make the fetch CORS-exempt. The only
+ * network request this triggers goes to the image's own host — the URL is
+ * never sent anywhere else (plan.md §8, constraint 3). */
+export interface AnalyzeUrlRequest {
+  type: typeof ANALYZE_URL_MESSAGE_TYPE;
+  /** http(s) URL of the image to fetch and analyze. */
+  url: string;
+}
+
 /** A ProviderFailure whose error survives JSON serialization. */
 export interface WireProviderFailure {
   providerId: string;
@@ -44,6 +59,13 @@ export interface WireVerdict {
 export type AnalyzeResponse =
   { ok: true; verdict: WireVerdict } | { ok: false; error: string };
 
+/** Reply to an AnalyzeUrlRequest. Carries `pinned` because only the worker
+ * saw the response headers: the content script's URL cache must apply the
+ * same no-store retention rule to fallback verdicts as to its own fetches. */
+export type AnalyzeUrlResponse =
+  | { ok: true; verdict: WireVerdict; pinned: boolean }
+  | { ok: false; error: string };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -55,6 +77,16 @@ export function isAnalyzeRequest(message: unknown): message is AnalyzeRequest {
     typeof message["bytesBase64"] === "string" &&
     typeof message["mimeType"] === "string" &&
     typeof message["sourceUrl"] === "string"
+  );
+}
+
+export function isAnalyzeUrlRequest(
+  message: unknown,
+): message is AnalyzeUrlRequest {
+  if (!isRecord(message)) return false;
+  return (
+    message["type"] === ANALYZE_URL_MESSAGE_TYPE &&
+    typeof message["url"] === "string"
   );
 }
 
@@ -92,6 +124,19 @@ export function isAnalyzeResponse(
 ): message is AnalyzeResponse {
   if (!isRecord(message)) return false;
   if (message["ok"] === true) return isWireVerdict(message["verdict"]);
+  return message["ok"] === false && typeof message["error"] === "string";
+}
+
+export function isAnalyzeUrlResponse(
+  message: unknown,
+): message is AnalyzeUrlResponse {
+  if (!isRecord(message)) return false;
+  if (message["ok"] === true) {
+    return (
+      isWireVerdict(message["verdict"]) &&
+      typeof message["pinned"] === "boolean"
+    );
+  }
   return message["ok"] === false && typeof message["error"] === "string";
 }
 

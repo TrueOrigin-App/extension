@@ -1704,3 +1704,155 @@ dispatch) verified the review fixes and caught two bugs jsdom could not:
   - Revisit only if Chrome removes or degrades the built-in item.
   - Next per §8 order: task 5.5 (byte-acquisition CORS fallbacks),
     informed by the daily-driver soak.
+
+## 2026-08-03 — Task 5.5: byte-acquisition CORS fallbacks
+
+The last Phase 2 item. Everything here is free-choice territory: no
+manifest changes (the host permissions granted in 5.1 are what make the
+fallback possible), no new dependencies, no SignalProvider/SignalResult
+changes, no user-facing wording. The daily-driver soak (§6 cadence note)
+continues after this lands and may retune the constants.
+
+### The acquisition ladder: force-cache → no-cache → worker-side fetch
+
+- **What:** in-page acquisition (unchanged from 5.2) now falls back to a
+  worker-side fetch when the page context cannot read the bytes: a new
+  `trueorigin:analyze-url` message asks the worker to fetch the URL under
+  its host permissions (CORS-exempt) and run the same pipeline. Fallback
+  triggers: `TypeError` from both in-page cache modes (the strict-CORS
+  signature — the dominant deterministic failure class since 5.1) and
+  HTTP error statuses (hosts that 403 Origin-carrying requests they
+  serve happily without one; the worker's request is exempt from that
+  refusal class too). Deliberately **not** a trigger: timeouts — a 30 s
+  stall is origin slowness, the worker would pay the same 30 s for the
+  same likely outcome, and the 5.2 retry budget already re-attempts
+  transient stalls on viewport re-entry. data:/blob: URLs never fall
+  back (data: decodes in-page without CORS; blob: handles are scoped to
+  the page's context and unreachable from the worker).
+- **Why worker fetch stays the fallback, not the primary:** unchanged
+  from the 5.2 rejection — the extension's cache partition can never hit
+  the page's HTTP-cache entry (guaranteeing a network fetch) and the
+  request lacks the page's Referer, so its bytes are less certainly the
+  render's bytes. The divergence risk is accepted only on paths where
+  the in-page bytes are unreachable anyway; the module headers record
+  it, and the text/* guard below catches the catastrophic form.
+- **Rejected:** canvas readback as a further fallback (drawing the image
+  and re-encoding strips the C2PA container — the fallback would destroy
+  the very evidence it exists to read; useless for provenance by
+  construction); an offscreen-document fetch (same partition problem as
+  the worker plus an `offscreen` permission ask).
+
+### Worker fetch policy (`src/background/fetch-image.ts`)
+
+- **`credentials: "include"`, mirroring the render request.** The render
+  sent the user's cookies; an anonymous refetch is likelier to be
+  answered with a different representation — or a login/challenge page —
+  than the bytes on screen, and cookie-gated CDN images (the class the
+  5.4 evaluation highlighted) would fail outright. Chrome exempts
+  extension-initiated requests to hosts the extension has permissions
+  for from SameSite blocking, so the cookies attach in practice.
+  Constraint 3 intact: the request goes only to the image's own host —
+  the host that already served these bytes to this user — carrying
+  nothing but the image URL it already knows. **Rejected:**
+  `credentials: "omit"` (a more "anonymous" posture, but it maximizes
+  representation divergence, which is the actual privacy-adjacent harm
+  here — a verdict about bytes the user never saw).
+- **Same Accept pin** (`IMAGE_ACCEPT`, the shared constant 5.2 moved to
+  `src/lib/` for exactly this) for the same `Vary: Accept` reason.
+- _*text/* responses are rejected_*, not analyzed: the render displayed
+  an image, so a text reply means this context was served something else
+  (login redirect, bot challenge). Feeding it to the pipeline would
+  yield finding "none" → an "Unknown" badge describing bytes that are
+  not the image. Other non-image types pass through (parity with the
+  in-page path, which also forwards whatever Content-Type it got).
+- **Non-http(s) URLs are refused before fetching** — defense in depth
+  should a compromised renderer ever forge the message.
+- **Pinnability is computed by the worker and returned in the reply**
+  (`pinned` on `AnalyzeUrlResponse`): only the worker saw the response
+  headers, and the content script's URL cache must apply the same
+  no-store retention rule to fallback verdicts as to its own. The
+  previously duplicated predicate is now shared
+  (`isPinnableResponse`, `src/lib/image-accept.ts`), as is the fetch
+  timeout.
+
+### Oversized transport routes through the worker fetch
+
+- **What:** in-page acquisitions larger than 32 MiB
+  (`MAX_INLINE_TRANSPORT_BYTES`) skip the message channel and use the
+  worker-fetch path even though the bytes were readable in-page.
+- **Why:** `sendMessage` JSON-serializes, so bytes travel as base64 (4/3
+  inflation) against Chrome's 64 MB message cap — a ~48 MiB image dies
+  in transport with an opaque error. 32 MiB of bytes is ~44.7 MB of
+  base64: comfortably under the cap while covering essentially every
+  real image. Cost accepted: the worker re-fetches from its own
+  partition on this rare path. Oversized data:/blob: payloads (which
+  the worker cannot fetch) still attempt inline transport and surface
+  as an analysis failure if the channel refuses them.
+- **Rejected:** chunked multi-message transport (protocol machinery for
+  a case the fallback already handles); skipping large images silently
+  (a silent coverage hole, and large images skew toward exactly the
+  high-resolution photography provenance matters for).
+
+### Verdicts in which no check completed do not badge (5.2/5.3 deferral)
+
+- **What:** the policy half of the "degraded verdicts still badge"
+  finding, resolved: a verdict carrying provider failures and **zero**
+  collected signals is rejected in `acquire.ts` (`assertCompleted`) and
+  takes the same path as any failed analysis — no badge, never cached
+  (both layers already refused retention), bounded by the 5.2 retry
+  budget, healable on viewport re-entry. A verdict mixing completed
+  signals with failures still renders, with the 5.3 popover disclosure
+  as its honesty mechanism — that split is now pinned by test.
+- **Why:** with a single provider, "failures only" means the one check
+  errored — epistemically identical to the analysis failing, which
+  task 4 already decided renders nothing ("a failed check supports no
+  claim, not even Unknown, which the mapper reserves for checks that
+  ran"). Badging Unknown from a WASM init failure while both caches
+  refuse to retain it was the two-layer incoherence the 5.2 review
+  called out; this aligns the badge with the caches instead of the
+  caches with the badge.
+- **Placement:** in the content script's acquisition layer, not the
+  worker — the worker reports pipeline results faithfully; badge policy
+  belongs to the surface that badges. Throwing (rather than filtering at
+  render) shares the rejection with every coalesced same-URL caller and
+  keeps it out of the URL cache by the existing no-cached-rejections
+  rule.
+
+### Acquisition extracted to `src/content/acquire.ts`
+
+- The ladder, transport, and policy logic moved out of the content
+  script's DOM wiring into a URL-in/verdict-out module with no element
+  coupling — same falsifiability rationale as the jsdom batch: the 5.2
+  force-cache → no-cache recovery was previously untestable (and
+  untested); now the whole ladder is pinned (`acquire.test.ts`, 13
+  tests), including which rung runs for which failure class and what
+  crosses the message channel. `fetch-image.test.ts` is the
+  background-level counterpart of the provider egress suite: it pins
+  that the handler fetches exactly the requested URL, once, with the
+  pinned Accept header and credentials.
+
+### Test page: live strict-CORS fixture
+
+- `index.html` adds ai_declared.png referenced via
+  `http://127.0.0.1:8917` — a different origin than the `localhost` page,
+  from a server that (deliberately, now documented) sends no
+  `Access-Control-Allow-Origin`. In-page acquisition fails at the CORS
+  layer for real, and the badge can only come from the worker fallback.
+  The audit checklist now expects the fallback fetch in the worker panel
+  in every warmth tier (the page-view URL cache dies with the page, so
+  the worker must re-acquire the bytes before its hash cache can
+  recognize them), and `serve.mjs` logs the requested host per hit so
+  render, blocked in-page attempt, and worker fetch are tellable apart
+  server-side.
+
+### Soak notes (what daily-driver use should watch, task 5.5 edition)
+
+- Frequency of the fallback firing (each firing is a doubled fetch for
+  that image — if it dominates on some major CDN, revisit).
+- text/* rejections in the console: each is a host where even the
+  credentialed worker fetch got a challenge page — a coverage hole to
+  characterize before Phase 3's privacy write-up.
+- Whether the fallback's requests in the worker network panel ever look
+  different from the render's own (same URL, same redirect chain — the
+  fetch follows redirects exactly as the render did; anything beyond
+  that would contradict the constraint-3 story and needs investigating).

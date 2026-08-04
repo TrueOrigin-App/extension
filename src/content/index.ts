@@ -4,9 +4,10 @@
 // scrolling past an image costs nothing. Scheduling policy lives in
 // scheduler.ts; free choices recorded in DECISIONS.md.
 //
-// Byte acquisition still happens here, in page context, with the page's own
-// origin privileges — so cross-origin images depend on permissive CORS until
-// the worker-side fallback lands (task 5.5).
+// Byte acquisition (acquire.ts) runs primarily here in page context, with
+// the page's own cache partition and request context; strict-CORS hosts
+// and oversized payloads fall back to a worker-side fetch under the
+// extension's host permissions (task 5.5).
 //
 // Verdict caching (task 5.2): analyses are keyed by URL for the page view,
 // so duplicate images and re-inserted elements cost one analysis per URL —
@@ -19,15 +20,8 @@
 // view.
 
 import { isCacheableVerdict } from "../core/types";
-import {
-  ANALYZE_MESSAGE_TYPE,
-  encodeBytes,
-  isAnalyzeResponse,
-  type AnalyzeRequest,
-  type WireVerdict,
-} from "../messaging/protocol";
 import { CoalescingLruCache } from "../lib/coalescing-lru";
-import { IMAGE_ACCEPT, mimeTypeFor } from "../lib/image-accept";
+import { acquireAndAnalyze, type UrlCacheEntry } from "./acquire";
 import { removeBadgeFor, renderBadge, syncBadges } from "./badge";
 import { ScanScheduler } from "./scheduler";
 
@@ -40,10 +34,10 @@ const VIEWPORT_LOOKAHEAD = "200px";
 // Images smaller than this on their short side are page furniture (icons,
 // avatars, spacers) — skipped, not analyzed, no badge.
 const MIN_IMAGE_DIMENSION_PX = 64;
-// A hung image load or fetch must never hold an analysis slot forever —
-// two of them would silently stop all scanning for the page view.
+// A hung image load must never hold an analysis slot forever — two of
+// them would silently stop all scanning for the page view. (The fetch
+// itself is bounded inside acquire.ts.)
 const SETTLE_TIMEOUT_MS = 10_000;
-const FETCH_TIMEOUT_MS = 30_000;
 // Bound on the page-view verdict cache. Provisional: entries are one
 // WireVerdict each (manifest-store detail dominates), so this only guards
 // unbounded growth on infinite-scroll pages.
@@ -51,8 +45,8 @@ const MAX_CACHED_VERDICTS = 200;
 // A failed analysis may be transient (503, timeout, a coalesced rejection
 // from another element's failure), so each scan cycle gets one retry on a
 // later viewport re-entry before the element goes terminal — bounding what
-// a deterministically failing URL (strict CORS until task 5.5) can cost to
-// one extra attempt per cycle.
+// a deterministically failing URL (one both acquisition paths reject) can
+// cost to one extra attempt per cycle.
 const MAX_ANALYSIS_ATTEMPTS = 2;
 
 // Attribute writes that change which bytes an <img> displays — on the img
@@ -83,14 +77,6 @@ function imageSettled(image: HTMLImageElement): Promise<void> {
   });
 }
 
-/** One analysis outcome, plus whether the URL cache may keep it: a
- * no-store response can serve different bytes on every fetch, so its
- * verdict is good for exactly the analysis that produced it. */
-interface UrlCacheEntry {
-  verdict: WireVerdict;
-  pinned: boolean;
-}
-
 // Page-view verdict cache, keyed by the analyzed URL — the same identity
 // badges carry (a badge is a claim about a specific URL). Duplicate images
 // share one in-flight analysis. Entries are retained only when the verdict
@@ -103,77 +89,6 @@ const verdictsByUrl = new CoalescingLruCache<UrlCacheEntry>({
   maxEntries: MAX_CACHED_VERDICTS,
   retain: (entry) => entry.pinned && isCacheableVerdict(entry.verdict),
 });
-
-async function fetchImage(url: string): Promise<Response> {
-  const request = (cache: RequestCache): Promise<Response> =>
-    fetch(url, {
-      headers: { accept: IMAGE_ACCEPT },
-      cache,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-  try {
-    // force-cache reuses the HTTP-cache entry the render stored regardless
-    // of freshness — collapsing the render+analyze double fetch observed at
-    // the task-4 checkpoint, and keeping the verdict about the bytes on
-    // screen rather than a newer representation a revalidation could
-    // return. Content-script fetches share the page's cache partition, and
-    // the pinned Accept header keeps Vary: Accept matching.
-    return await request("force-cache");
-  } catch (thrown) {
-    if (!(thrown instanceof TypeError)) throw thrown;
-    // A cached entry can be unusable rather than merely missing: one
-    // stored by the no-cors <img> render on a server that only emits CORS
-    // headers for Origin-carrying requests has none, and Chrome's HTTP
-    // cache sits below the CORS layer (crbug.com/409090), so force-cache
-    // serves it to this cors-mode fetch as a deterministic TypeError.
-    // Revalidate past it — at the cost of possibly analyzing newer bytes
-    // than the render (pre-5.2 behavior; the pinned bytes are unreadable
-    // here by definition). Other TypeErrors (offline, DNS) just fail the
-    // same way twice, quickly.
-    return request("no-cache");
-  }
-}
-
-/** Fetches the image bytes and runs them through the worker's pipeline.
- * Element-independent by design: the result is a claim about the URL, so
- * it stays valid — and cacheable — even if the element that wanted it was
- * invalidated mid-flight. */
-async function fetchAndAnalyze(url: string): Promise<UrlCacheEntry> {
-  const response = await fetchImage(url);
-  if (!response.ok) {
-    throw new Error(`image fetch failed: HTTP ${response.status}`);
-  }
-  const blob = await response.blob();
-  const mimeType = mimeTypeFor(blob, response.url);
-  if (!mimeType) {
-    throw new Error("could not determine image MIME type");
-  }
-
-  const request: AnalyzeRequest = {
-    type: ANALYZE_MESSAGE_TYPE,
-    bytesBase64: encodeBytes(new Uint8Array(await blob.arrayBuffer())),
-    mimeType,
-    sourceUrl: url,
-  };
-  const result: unknown = await chrome.runtime.sendMessage(request);
-  // Not a cast: the verdict below is cached and dereferenced again at
-  // badge-click time, so a malformed reply must take this handled failure
-  // path, not surface later as a TypeError inside a click handler.
-  if (!isAnalyzeResponse(result)) {
-    throw new Error("analysis failed: malformed worker reply");
-  }
-  if (!result.ok) {
-    throw new Error(`analysis failed: ${result.error}`);
-  }
-  return {
-    verdict: result.verdict,
-    // Cache-Control is CORS-safelisted, so it is readable even on
-    // cross-origin responses.
-    pinned: !(response.headers.get("cache-control") ?? "")
-      .toLowerCase()
-      .includes("no-store"),
-  };
-}
 
 async function analyzeImage(image: HTMLImageElement): Promise<void> {
   // Ownership: this run acts for the element's current generation. Any
@@ -227,8 +142,8 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
   // their analysis anyway). blob: URLs are short opaque handles to content
   // that is immutable for the handle's lifetime — they cache like http(s).
   const { verdict } = url.startsWith("data:")
-    ? await fetchAndAnalyze(url)
-    : await verdictsByUrl.getOrRun(url, () => fetchAndAnalyze(url));
+    ? await acquireAndAnalyze(url)
+    : await verdictsByUrl.getOrRun(url, () => acquireAndAnalyze(url));
 
   if (generationOf(image) !== generation || !image.isConnected) {
     // Invalidated or removed mid-analysis; whatever re-queued or reaped
@@ -263,7 +178,9 @@ const scheduler = new ScanScheduler<HTMLImageElement>({
     } catch (thrown) {
       // No badge on failure: a badge is a claim about the image, and a
       // failed check supports none — not even "Unknown", which the mapper
-      // reserves for checks that ran (plan.md §2). Failures are never
+      // reserves for checks that ran (plan.md §2). This includes analyses
+      // in which no provider check completed (acquire.ts rejects those
+      // rather than letting them badge Unknown). Failures are never
       // cached, and the element gets MAX_ANALYSIS_ATTEMPTS per cycle: the
       // first failure forgets it so a later viewport re-entry retries
       // (transient failures — 503s, timeouts, rejections shared through

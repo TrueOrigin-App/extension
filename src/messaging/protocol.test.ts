@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { Verdict } from "../core/types";
 import {
   ANALYZE_MESSAGE_TYPE,
+  ANALYZE_URL_MESSAGE_TYPE,
   decodeBytes,
   encodeBytes,
   isAnalyzeRequest,
   isAnalyzeResponse,
+  isAnalyzeUrlRequest,
+  isAnalyzeUrlResponse,
   isWireVerdict,
   toWireVerdict,
 } from "./protocol";
@@ -48,6 +51,56 @@ describe("isAnalyzeRequest", () => {
     expect(isAnalyzeRequest({ ...valid, bytesBase64: 7 })).toBe(false);
     expect(isAnalyzeRequest({ ...valid, mimeType: undefined })).toBe(false);
     expect(isAnalyzeRequest({ ...valid, sourceUrl: null })).toBe(false);
+  });
+});
+
+describe("isAnalyzeUrlRequest", () => {
+  const valid = {
+    type: ANALYZE_URL_MESSAGE_TYPE,
+    url: "https://cdn.example/pic.png",
+  };
+
+  it("accepts a well-formed request", () => {
+    expect(isAnalyzeUrlRequest(valid)).toBe(true);
+  });
+
+  it("rejects other message types and malformed shapes", () => {
+    expect(isAnalyzeUrlRequest(null)).toBe(false);
+    expect(isAnalyzeUrlRequest({ type: ANALYZE_MESSAGE_TYPE })).toBe(false);
+    expect(isAnalyzeUrlRequest({ ...valid, type: "other" })).toBe(false);
+    expect(isAnalyzeUrlRequest({ ...valid, url: 7 })).toBe(false);
+    expect(isAnalyzeUrlRequest({ type: ANALYZE_URL_MESSAGE_TYPE })).toBe(false);
+  });
+});
+
+describe("isAnalyzeUrlResponse", () => {
+  const verdict = {
+    verdict: "unknown",
+    basis: [],
+    signals: [{ providerId: "c2pa", finding: "none", confidence: 0 }],
+    failures: [],
+  };
+
+  it("accepts both reply arms", () => {
+    expect(isAnalyzeUrlResponse({ ok: true, verdict, pinned: true })).toBe(
+      true,
+    );
+    expect(isAnalyzeUrlResponse({ ok: true, verdict, pinned: false })).toBe(
+      true,
+    );
+    expect(isAnalyzeUrlResponse({ ok: false, error: "boom" })).toBe(true);
+  });
+
+  it("rejects replies missing the pinned flag or a usable verdict", () => {
+    expect(isAnalyzeUrlResponse(undefined)).toBe(false);
+    expect(isAnalyzeUrlResponse({ ok: true, verdict })).toBe(false);
+    expect(isAnalyzeUrlResponse({ ok: true, verdict, pinned: "yes" })).toBe(
+      false,
+    );
+    expect(
+      isAnalyzeUrlResponse({ ok: true, verdict: null, pinned: true }),
+    ).toBe(false);
+    expect(isAnalyzeUrlResponse({ ok: false })).toBe(false);
   });
 });
 

@@ -101,6 +101,24 @@
       </figcaption>
     </figure>
 
+    <figure>
+      <img
+        src="http://127.0.0.1:8917/fixtures/ai_declared.png"
+        alt="AI-declared fixture via a strict-CORS origin"
+      />
+      <figcaption>
+        <strong>ai_declared.png (via 127.0.0.1)</strong> — same fixture served
+        cross-origin with no CORS headers (<code>localhost</code> and
+        <code>127.0.0.1</code> are different origins, and this server never
+        sends <code>Access-Control-Allow-Origin</code>). In-page byte
+        acquisition must fail at the CORS layer, and the task-5.5 worker
+        fallback must acquire the bytes instead: expected badge
+        <em>AI — declared</em>. The page network panel shows the render request
+        plus one CORS-blocked analysis fetch (red — expected); the worker panel
+        shows the fallback fetch to <code>127.0.0.1:8917</code>.
+      </figcaption>
+    </figure>
+
     <h2>Popover checks (task 5.3)</h2>
     <ul>
       <li>
@@ -155,19 +173,27 @@
       </li>
       <li>
         <strong>Warm worker</strong> (any reload while the inspector stays open,
-        or within ~30 s of the last analysis): possibly no requests at all — the
+        or within ~30 s of the last analysis): possibly no other requests — the
         task-5.2 verdict cache recognizes the image bytes and skips re-analysis,
         including the manifest fetch.
       </li>
     </ul>
-    <p>In every tier, nothing else — no media bytes, no page URLs.</p>
+    <p>
+      In <em>every</em> tier, the strict-CORS figure adds one
+      <code>127.0.0.1:8917</code> fetch (task 5.5): the worker must acquire
+      those bytes on each page view before its content-hash cache can even
+      recognize them — the page-view URL cache that would skip it dies with the
+      page. Beyond that, nothing else — no media bytes, no page URLs.
+    </p>
     <p>
       In the <strong>page's</strong> network panel (task 5.2, double-fetch
-      collapse): each fixture URL appears exactly twice — the render request
-      from the network, then the analysis fetch served from
+      collapse): each same-origin fixture URL appears exactly twice — the render
+      request from the network, then the analysis fetch served from
       <em>(disk cache)</em> / <em>(memory cache)</em>, never from the server.
-      The duplicate figure above adds no request of its own. The server logs one
-      hit per fixture per load.
+      The duplicate figure adds no request of its own; the strict-CORS figure
+      adds its render plus one CORS-blocked analysis attempt. The server log
+      (one line per hit, with the requested host) makes the same story visible
+      server-side.
     </p>
   </body>
 </html>
