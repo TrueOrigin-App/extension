@@ -5,6 +5,8 @@ import {
   decodeBytes,
   encodeBytes,
   isAnalyzeRequest,
+  isAnalyzeResponse,
+  isWireVerdict,
   toWireVerdict,
 } from "./protocol";
 
@@ -46,6 +48,37 @@ describe("isAnalyzeRequest", () => {
     expect(isAnalyzeRequest({ ...valid, bytesBase64: 7 })).toBe(false);
     expect(isAnalyzeRequest({ ...valid, mimeType: undefined })).toBe(false);
     expect(isAnalyzeRequest({ ...valid, sourceUrl: null })).toBe(false);
+  });
+});
+
+describe("isAnalyzeResponse", () => {
+  const verdict = {
+    verdict: "unknown",
+    basis: [],
+    signals: [{ providerId: "c2pa", finding: "none", confidence: 0 }],
+    failures: [{ providerId: "c2pa", message: "trust fetch 503" }],
+  };
+
+  it("accepts both reply arms", () => {
+    expect(isAnalyzeResponse({ ok: true, verdict })).toBe(true);
+    expect(isAnalyzeResponse({ ok: false, error: "boom" })).toBe(true);
+  });
+
+  it("rejects malformed replies rather than letting them badge", () => {
+    expect(isAnalyzeResponse(undefined)).toBe(false);
+    expect(isAnalyzeResponse({ ok: true })).toBe(false);
+    expect(isAnalyzeResponse({ ok: true, verdict: null })).toBe(false);
+    expect(isAnalyzeResponse({ ok: false })).toBe(false);
+  });
+
+  it("checks every wire-verdict field the popover dereferences", () => {
+    expect(isWireVerdict(verdict)).toBe(true);
+    expect(isWireVerdict({ ...verdict, verdict: "not-ai" })).toBe(false);
+    expect(isWireVerdict({ ...verdict, signals: undefined })).toBe(false);
+    expect(isWireVerdict({ ...verdict, signals: [{}] })).toBe(false);
+    expect(isWireVerdict({ ...verdict, failures: [{ providerId: "x" }] })).toBe(
+      false,
+    );
   });
 });
 

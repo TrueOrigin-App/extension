@@ -145,19 +145,27 @@ describe("popover", () => {
     expect(style).toContain(".evidence[hidden]");
   });
 
-  it("labels badge and popover with the image's alt text when present", () => {
+  it("describes badge and popover with the image's alt text when present", () => {
     const image = makeImage("https://example.com/a.jpg");
     image.alt = "Sunset over hills";
     renderBadge(image, wire("ai-declared"), image.src);
     const badge = badgeElements()[0]!;
-    expect(badge.getAttribute("aria-label")).toBe(
-      "AI — declared — Sunset over hills",
-    );
+    // Alt rides as the accessible description: the name stays the short
+    // visible label (page alt can be paragraph-length, and the name is
+    // what voice-control users must speak).
+    expect(badge.getAttribute("aria-label")).toBeNull();
+    expect(badge.getAttribute("aria-description")).toBe("Sunset over hills");
 
     badge.click();
-    expect(popoverElements()[0]?.getAttribute("aria-label")).toBe(
-      "AI — declared — details for “Sunset over hills”",
-    );
+    const popover = popoverElements()[0];
+    expect(popover?.getAttribute("aria-label")).toBe("AI — declared — details");
+    expect(popover?.getAttribute("aria-description")).toBe("Sunset over hills");
+  });
+
+  it("marks the overlay as English for assistive tech", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    expect(host()?.getAttribute("lang")).toBe("en");
   });
 
   it("keeps at most one popover open, switching to the last badge clicked", () => {
@@ -177,20 +185,50 @@ describe("popover", () => {
     expect(badgeElements()[0]?.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("closes on Escape and returns focus to the badge", () => {
+  it("closes on Escape from inside the overlay, consumed, refocusing the badge", () => {
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("ai-declared"), image.src);
     const badge = badgeElements()[0]!;
     const focus = vi.spyOn(badge, "focus");
 
     badge.click();
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    );
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+    popoverElements()[0]!.dispatchEvent(escape);
 
     expect(popoverElements()).toHaveLength(0);
     expect(badge.getAttribute("aria-expanded")).toBe("false");
     expect(focus).toHaveBeenCalledTimes(1);
+    // Consumed: native Escape defaults (<dialog> cancel, fullscreen exit)
+    // must not also fire — one keypress dismisses exactly one layer.
+    expect(escape.defaultPrevented).toBe(true);
+  });
+
+  it("leaves an Escape aimed at page UI to the page", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    // Focus/origin outside the overlay: the page owns this keypress.
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(popoverElements()).toHaveLength(1);
+
+    // Mid-IME-composition Escape cancels the composition, nothing else.
+    popoverElements()[0]!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        composed: true,
+        isComposing: true,
+      }),
+    );
+    expect(popoverElements()).toHaveLength(1);
   });
 
   it("closes on pointerdown outside, stays open on pointerdown inside", () => {
@@ -203,6 +241,95 @@ describe("popover", () => {
 
     pointerDownOn(document.body);
     expect(popoverElements()).toHaveLength(0);
+  });
+
+  it("does not treat a main-scrollbar drag as an outside click", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    // Chrome dispatches main-scrollbar drags as pointerdown on the root
+    // element, at coordinates outside its client box (the gutter).
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(
+      800,
+    );
+    vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(
+      600,
+    );
+    document.documentElement.dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        clientX: 810,
+        clientY: 100,
+      }),
+    );
+    expect(popoverElements()).toHaveLength(1);
+
+    // A genuine click on the page background still closes.
+    document.documentElement.dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        clientX: 400,
+        clientY: 100,
+      }),
+    );
+    expect(popoverElements()).toHaveLength(0);
+  });
+
+  it("closes when focus moves into an iframe", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    // Cross-document iframes swallow pointer and key events; the window
+    // blur their focus causes is the only dismiss signal that crosses.
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    vi.spyOn(document, "activeElement", "get").mockReturnValue(iframe);
+    window.dispatchEvent(new Event("blur"));
+
+    expect(popoverElements()).toHaveLength(0);
+  });
+
+  it("returns focus to the badge when a close removes a focused panel", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const badge = badgeElements()[0]!;
+    badge.click();
+    popoverElements()[0]!
+      .querySelector<HTMLButtonElement>(".disclosure")!
+      .focus();
+    const focus = vi.spyOn(badge, "focus");
+
+    pointerDownOn(document.body);
+
+    expect(popoverElements()).toHaveLength(0);
+    // Without the rescue, focus silently falls to <body> and the next Tab
+    // restarts from the top of the page.
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps overlay interaction events from reaching page handlers", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const badge = badgeElements()[0]!;
+    const seen = vi.fn();
+    document.addEventListener("click", seen);
+    document.addEventListener("pointerdown", seen);
+    try {
+      badge.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true }),
+      );
+      badge.dispatchEvent(
+        new Event("pointerdown", { bubbles: true, composed: true }),
+      );
+      // A page-level outside-click or hotkey handler must never see
+      // interactions with the overlay.
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("click", seen);
+      document.removeEventListener("pointerdown", seen);
+    }
   });
 
   it("closes when its image's badge is removed", () => {
@@ -250,6 +377,40 @@ describe("popover", () => {
     const popover = popoverElements()[0];
     expect(popover?.querySelector(".headline")?.textContent).toBe("Unknown");
     expect(popover?.getAttribute("aria-label")).toBe("Unknown — details");
+  });
+
+  it("keeps the panel's content on a same-verdict re-render", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    const verdict = wire("ai-declared");
+    renderBadge(image, verdict, image.src);
+    badgeElements()[0]!.click();
+    const disclosure =
+      popoverElements()[0]!.querySelector<HTMLButtonElement>(".disclosure")!;
+    disclosure.click();
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+
+    // Position churn re-renders with the identical cached verdict object;
+    // rebuilding then would reset disclosure state and detach focus.
+    renderBadge(image, verdict, image.src);
+
+    expect(
+      popoverElements()[0]
+        ?.querySelector(".disclosure")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("closes the popover when a re-render finds the image collapsed", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    // A cached verdict can resolve in the same frame a carousel hides the
+    // slide — before any sync pass sees the collapsed rect.
+    vi.spyOn(image, "getBoundingClientRect").mockReturnValue(asRect(COLLAPSED));
+    renderBadge(image, wire("unknown"), image.src);
+
+    expect(popoverElements()).toHaveLength(0);
   });
 
   it("is re-adopted after its badge when the host is rebuilt", () => {

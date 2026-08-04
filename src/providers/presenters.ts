@@ -24,10 +24,13 @@ export interface SignalPresentation {
   facts: SignalFact[];
 }
 
-const presenters: Record<string, (signal: SignalResult) => SignalPresentation> =
-  {
-    [C2PA_PROVIDER_ID]: presentC2paSignal,
-  };
+// A Map, not an object literal: provider ids index it, and an id that
+// collides with an Object.prototype key ("constructor", "toString") must
+// miss and fall back generically, not resolve an inherited function.
+const presenters = new Map<
+  string,
+  (signal: SignalResult) => SignalPresentation
+>([[C2PA_PROVIDER_ID, presentC2paSignal]]);
 
 /** Generic fallback for providers with no presenter registered. Placeholder
  * wording (Phase 3 brand work), deliberately factual and unadorned. */
@@ -42,6 +45,6 @@ function presentGenericSignal(signal: SignalResult): SignalPresentation {
 }
 
 export function presentSignal(signal: SignalResult): SignalPresentation {
-  const presenter = presenters[signal.providerId];
+  const presenter = presenters.get(signal.providerId);
   return presenter ? presenter(signal) : presentGenericSignal(signal);
 }

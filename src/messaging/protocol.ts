@@ -6,11 +6,12 @@
 // to strings. The image bytes and source URL cross an extension-internal
 // channel only — they never leave the machine (plan.md §8, constraint 3).
 
-import type {
-  ProviderFailure,
-  SignalResult,
-  Verdict,
-  VerdictId,
+import {
+  VERDICT_IDS,
+  type ProviderFailure,
+  type SignalResult,
+  type Verdict,
+  type VerdictId,
 } from "../core/types";
 
 export const ANALYZE_MESSAGE_TYPE = "trueorigin:analyze";
@@ -43,15 +44,55 @@ export interface WireVerdict {
 export type AnalyzeResponse =
   { ok: true; verdict: WireVerdict } | { ok: false; error: string };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export function isAnalyzeRequest(message: unknown): message is AnalyzeRequest {
-  if (typeof message !== "object" || message === null) return false;
-  const candidate = message as Record<string, unknown>;
+  if (!isRecord(message)) return false;
   return (
-    candidate["type"] === ANALYZE_MESSAGE_TYPE &&
-    typeof candidate["bytesBase64"] === "string" &&
-    typeof candidate["mimeType"] === "string" &&
-    typeof candidate["sourceUrl"] === "string"
+    message["type"] === ANALYZE_MESSAGE_TYPE &&
+    typeof message["bytesBase64"] === "string" &&
+    typeof message["mimeType"] === "string" &&
+    typeof message["sourceUrl"] === "string"
   );
+}
+
+/** Shape check for a verdict arriving off the wire. Deep enough to cover
+ * every dereference the content script performs at badge-click time
+ * (popover.ts iterates signals/failures and reads providerId/message);
+ * signal detail stays `unknown` — presenters harden it themselves. */
+export function isWireVerdict(value: unknown): value is WireVerdict {
+  if (!isRecord(value)) return false;
+  return (
+    (VERDICT_IDS as readonly unknown[]).includes(value["verdict"]) &&
+    Array.isArray(value["basis"]) &&
+    Array.isArray(value["signals"]) &&
+    value["signals"].every(
+      (signal: unknown) =>
+        isRecord(signal) && typeof signal["providerId"] === "string",
+    ) &&
+    Array.isArray(value["failures"]) &&
+    value["failures"].every(
+      (failure: unknown) =>
+        isRecord(failure) &&
+        typeof failure["providerId"] === "string" &&
+        typeof failure["message"] === "string",
+    )
+  );
+}
+
+/** Guard for the worker's reply. The worker is extension code, but the
+ * reply crosses a JSON channel that protocol drift or a future persisted
+ * cache could corrupt — and the verdict it carries is retained per badge
+ * and dereferenced at badge-click time, so a malformed reply must fail
+ * the analysis (handled, logged) rather than throw in a click handler. */
+export function isAnalyzeResponse(
+  message: unknown,
+): message is AnalyzeResponse {
+  if (!isRecord(message)) return false;
+  if (message["ok"] === true) return isWireVerdict(message["verdict"]);
+  return message["ok"] === false && typeof message["error"] === "string";
 }
 
 // btoa takes a binary string, and building one via a single spread overflows

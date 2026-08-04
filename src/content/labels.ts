@@ -30,15 +30,23 @@ export const VERDICT_EXPLANATIONS: Record<VerdictId, string> = {
   "human-verified":
     "A signed record from a real camera shows this image was captured " +
     "with it, with no edits recorded since.",
+  // "usable" carries the §2 definition (Unknown = no *usable* signals):
+  // three of the four C2PA reasons mapping here found credentials that
+  // simply weren't usable as evidence, so "was found" alone would
+  // contradict the disclosure right beneath it.
   unknown:
-    "No provenance information was found for this image. Most images " +
-    "carry none, so this says nothing either way.",
+    "No usable provenance information was found for this image. Most " +
+    "images carry none, so this says nothing either way.",
 };
 
 /** Remaining popover strings, same placeholder status as above. */
 export const POPOVER_STRINGS = {
   /** The progressive-disclosure toggle (plan.md §4). */
   disclosureLabel: "How do we know?",
+  /** Accessible name of the popover dialog. The image's alt text is not
+   * part of the name — it rides along as `aria-description` (badge.ts),
+   * keeping names short for voice-control users. */
+  dialogLabel: (verdictLabel: string): string => `${verdictLabel} — details`,
   /** Shown when the verdict carries provider failures: the check ran but
    * degraded, and honesty requires saying so (DECISIONS.md, task 5.2
    * deferred finding). */

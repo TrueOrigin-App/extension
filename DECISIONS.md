@@ -1526,3 +1526,109 @@ and constraint 4 — and surfaced four findings, fixed immediately:
   strings inside the disclosure (a display-name field in the presenters
   registry is the constraint-4-clean Phase 3 fix); keyboard-only
   scrolling of an overflowing evidence list.
+
+## 2026-08-03 — Task 5.3 code-review fixes (post-merge review, 15 findings)
+
+A multi-agent code review of the 5.3 branch (10 finder angles, adversarial
+verification) confirmed 13 findings and carried 2 plausible ones; all 15
+are fixed here. Free-choice decisions made while fixing:
+
+### Copy corrections (placeholder status unchanged; Phase 3 still finalizes)
+
+- **"Unknown" explanation** now says "No _usable_ provenance information
+  was found" — the §2 definition. The old "No provenance information was
+  found" was false for three of the four C2PA reasons mapping to Unknown
+  (invalid-manifest, untrusted-capture, no-origin-declaration: credentials
+  were found, they just weren't usable) and self-contradicted the
+  disclosure text under it.
+- **C2PA `ai-source-type` summary** re-worded to mirror the approved
+  verdict-level "ai-declared" copy ("made with AI or contains AI-generated
+  material", no "from the tool that made it"): the reason also fires on
+  composite declarations from ingredient manifests, and the signer/
+  generator facts can name a later editor, so the old sentence repeated
+  the exact composite overclaim this task fixed in labels.ts.
+
+### Overlay containment and dismissal (badge.ts)
+
+- **Event containment at the host boundary:** discrete interaction events
+  (pointer up/down/cancel, mouse, click/aux/dbl, contextmenu, touch,
+  key, wheel) are stopPropagation'd on the host div in the bubble phase,
+  replacing the single click-only stopPropagation. Previously every other
+  overlay event retargeted to the host and reached page document/window
+  handlers — closing page dropdowns via their outside-click handlers.
+  Move streams (pointermove/mousemove) deliberately still flow: pages
+  track those continuously and a badge-sized dead zone is its own bug.
+- **Escape is scoped to the overlay and fully consumed.** It closes the
+  popover only when the keypress originates inside the overlay (badge or
+  panel), with an `isComposing` guard, `preventDefault` (stops native
+  `<dialog>` cancel / fullscreen exit), and `stopImmediatePropagation`.
+  Behavior change: an Escape while focus is in page UI now belongs to the
+  page and leaves the panel open (light dismiss still bounds it). The old
+  handler hijacked every Escape on the page, stole focus into the badge,
+  and still let native defaults run (double dismiss).
+- **Light-dismiss blind spots:** main-scrollbar drags (pointerdown on the
+  root element in the scrollbar gutter, RTL-aware) no longer close the
+  popover — that was the one scroll method that killed it. Cross-document
+  iframes swallow pointer/key events entirely, so a `window` blur with
+  `document.activeElement` being an iframe now closes the panel — the one
+  interaction signal that crosses the boundary. Inner-scroller scrollbar
+  drags still light-dismiss (ordinary outside interaction; not worth the
+  per-element offsetX heuristics).
+- **Focus rescue on every close path:** closePopover returns focus to the
+  badge whenever the departing panel contained it (previously only the
+  Escape path did), so reaps/outside-clicks no longer drop keyboard focus
+  to `<body>`. A same-verdict re-render (cached verdict, position churn)
+  no longer rebuilds the panel — preserving disclosure state and focus;
+  rebuild happens only on an actual verdict change.
+- **Collapsed-rect close on the re-render path:** renderBadge now applies
+  the same rule as syncBadges (shared `isCollapsed` predicate, third copy
+  removed) instead of placing the panel against a zeroed rect at the
+  document origin.
+
+### Overlay isolation and a11y (badge.ts, labels.ts)
+
+- **`all: initial` on `.badge` and `.popover`:** the shadow boundary stops
+  selectors but not inheritance — page rules matching the host div leaked
+  `direction`, `letter-spacing`, `text-transform`, etc. into the overlay
+  (RTL sites re-ordered the English popover text). Both roots reset and
+  re-declare everything they need; descendants inherit from the reset
+  roots. `lang="en"` added on the host (WCAG 3.1.2 — overlay strings are
+  English regardless of page language; localization is future work).
+- **Alt text moved from accessible name to `aria-description`** on both
+  badge and popover: page-authored alt can be paragraph-length, and the
+  name is what voice-control users must speak. The badge's name is its
+  visible label; the popover dialog's name is "<verdict> — details" via
+  `POPOVER_STRINGS.dialogLabel`, moving the last user-facing template out
+  of badge.ts (per the strings-live-in-labels decision).
+
+### Structure and hardening
+
+- **placePopover takes a placement object** including a caller-supplied
+  `viewportWidth`: it read `documentElement.clientWidth` mid-write, which
+  forced a synchronous reflow on every popover-open sync frame despite
+  its write-only contract. syncBadges gathers all reads ahead of writes;
+  the open/re-render paths use a shared measure-then-place helper.
+- **Presenter registry is a `Map`,** so a future provider id colliding
+  with an `Object.prototype` key falls back generically instead of
+  invoking an inherited function.
+- **REASONS set removed from the C2PA presenter:** `SUMMARIES` (a
+  compiler-exhaustive `Record` over the reason union) is now the reason
+  whitelist via `Object.hasOwn` — a new reason can no longer be silently
+  rejected by a stale hand-maintained list.
+- **Worker replies are validated** (`isAnalyzeResponse`/`isWireVerdict` in
+  protocol.ts) instead of cast: the verdict is retained per badge and
+  dereferenced at click time, so a malformed reply now takes the handled
+  analysis-failure path rather than throwing in a click handler.
+
+### Deferred (recorded, intentionally not fixed)
+
+- **Badge captures clicks over page UI stacked above the image** (modals,
+  cookie banners under our max z-index): every hit-test heuristic
+  considered (elementsFromPoint at click or sync time) misfires on the
+  far-more-common stretched-link card pattern, where a page overlay
+  legitimately covers the image — hiding or muting the badge exactly
+  where badges matter most. Native top-layer UI (`<dialog>.showModal`,
+  popover API) already paints and hit-tests above the overlay, which
+  bounds the damage to z-index-based overlays that happen to overlap the
+  24px pill. Accepted for the soak; revisit with Phase 3 (a smaller
+  badge, or a yield-on-cover heuristic informed by real sites).

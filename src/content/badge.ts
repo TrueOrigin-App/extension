@@ -16,16 +16,51 @@
 
 import type { WireVerdict } from "../messaging/protocol";
 import { buildPopoverContent } from "./popover";
-import { VERDICT_LABELS } from "./labels";
+import { POPOVER_STRINGS, VERDICT_LABELS } from "./labels";
 
 const HOST_ID = "trueorigin-badge-host";
+
+// Discrete interaction events from inside the overlay retarget to the host
+// and would otherwise bubble on into page document/window handlers —
+// outside-click closers, hotkey handlers — making the page react to
+// interactions with our UI (or dismiss its own). Stopped at the host
+// boundary instead, in the bubble phase, so the overlay's own inner
+// listeners have already run. Pointer/mouse *move* streams are left
+// flowing: pages track those continuously, and a badge-sized dead zone
+// would be its own breakage. Page listeners registered capture-phase on
+// window fire before anything here can run — out of reach by design.
+const CONTAINED_EVENT_TYPES = [
+  "pointerdown",
+  "pointerup",
+  "pointercancel",
+  "mousedown",
+  "mouseup",
+  "click",
+  "auxclick",
+  "dblclick",
+  "contextmenu",
+  "touchstart",
+  "touchend",
+  "touchcancel",
+  "keydown",
+  "keyup",
+  "keypress",
+  "wheel",
+] as const;
 
 // Deliberately plain, neutral presentation for every verdict state —
 // placeholder until Phase 3 brand work, like the wording in labels.ts.
 // Colors hold WCAG AA contrast on the solid panel; the focus ring pairs a
 // light outline with a dark halo so it reads over arbitrary page imagery.
 const BADGE_STYLE = `
+  /* The shadow boundary stops page selectors but not inheritance: page
+     rules matching the host div (html, div, *) compute on it and inherit
+     into the tree — direction, letter-spacing, text-transform, and the
+     rest. "all: initial" on both roots cuts that off; every property the
+     overlay needs is re-declared after it, and descendants inherit from
+     these reset roots. */
   .badge {
+    all: initial;
     position: absolute;
     box-sizing: border-box;
     display: inline-flex;
@@ -55,6 +90,8 @@ const BADGE_STYLE = `
     box-shadow: 0 0 0 5px rgba(28, 32, 38, 0.9);
   }
   .popover {
+    all: initial;
+    display: block;
     position: absolute;
     z-index: 1;
     box-sizing: border-box;
@@ -180,11 +217,20 @@ function ensureHost(): ShadowRoot {
 
   const host = document.createElement("div");
   host.id = HOST_ID;
+  // Overlay strings are English regardless of the page's language; without
+  // this, screen readers pronounce them with the host page's rules
+  // (WCAG 3.1.2). Localization is future work.
+  host.setAttribute("lang", "en");
   // Zero-footprint anchor at the document origin: badges inside it are
   // positioned in document coordinates and scroll with the page.
   host.style.cssText =
     "position: absolute; top: 0; left: 0; width: 0; height: 0; " +
     "z-index: 2147483647; pointer-events: none;";
+  // The host itself is 0×0 and pointer-events: none, so every contained
+  // event here originated on the badge or popover inside the shadow tree.
+  for (const type of CONTAINED_EVENT_TYPES) {
+    host.addEventListener(type, (event) => event.stopPropagation());
+  }
 
   shadowRoot = host.attachShadow({ mode: "open" });
   const style = document.createElement("style");
@@ -207,16 +253,22 @@ function ensureHost(): ShadowRoot {
   return shadowRoot;
 }
 
+/** A collapsed rect means the image is hidden or not laid out
+ * (display:none, an emptied carousel slide). One definition, three
+ * enforcement sites: positionAt hides the badge, and syncBadges/renderBadge
+ * close an open popover — a badge or panel floating over nothing is a
+ * claim about nothing. */
+function isCollapsed(rect: DOMRect): boolean {
+  return rect.width < 1 || rect.height < 1;
+}
+
 function positionAt(
   badge: HTMLElement,
   rect: DOMRect,
   scrollX: number,
   scrollY: number,
 ): void {
-  // A collapsed rect means the image is hidden or not laid out (display:none,
-  // an emptied carousel slide) — a badge floating over nothing is a claim
-  // about nothing, so hide it until the image shows again.
-  if (rect.width < 1 || rect.height < 1) {
+  if (isCollapsed(rect)) {
     badge.style.display = "none";
     return;
   }
@@ -225,55 +277,96 @@ function positionAt(
   badge.style.top = `${rect.top + scrollY + 8}px`;
 }
 
+/** Every layout read popover placement needs, gathered by the caller —
+ * syncBadges collects these in its read phase so placement stays a pure
+ * write and never forces a mid-sync reflow. */
+interface PopoverPlacement {
+  rect: DOMRect;
+  scrollX: number;
+  scrollY: number;
+  popoverWidth: number;
+  badgeHeight: number;
+  viewportWidth: number;
+}
+
 /** Write-only popover placement: below the badge, clamped so the panel
- * stays inside the viewport horizontally. Layout reads (widths, heights)
- * are the caller's job, keeping syncBadges to one read/write cycle. */
-function placePopover(
+ * stays inside the viewport horizontally. */
+function placePopover(popover: HTMLDivElement, place: PopoverPlacement): void {
+  const { rect, scrollX, scrollY, popoverWidth, badgeHeight, viewportWidth } =
+    place;
+  const ideal = rect.left + scrollX + 8;
+  const maxLeft = scrollX + viewportWidth - popoverWidth - 8;
+  popover.style.left = `${Math.max(scrollX + 8, Math.min(ideal, maxLeft))}px`;
+  popover.style.top = `${rect.top + scrollY + 8 + badgeHeight + 6}px`;
+}
+
+/** Measure-then-place for the open and re-render paths, where the panel
+ * was just (re)built and a synchronous measure is unavoidable — cold
+ * paths; the per-frame sync path instead reads ahead in syncBadges. */
+function measureAndPlacePopover(
+  entry: BadgeEntry,
   popover: HTMLDivElement,
   rect: DOMRect,
   scrollX: number,
   scrollY: number,
-  popoverWidth: number,
-  badgeHeight: number,
 ): void {
-  const ideal = rect.left + scrollX + 8;
-  const maxLeft =
-    scrollX + document.documentElement.clientWidth - popoverWidth - 8;
-  popover.style.left = `${Math.max(scrollX + 8, Math.min(ideal, maxLeft))}px`;
-  popover.style.top = `${rect.top + scrollY + 8 + badgeHeight + 6}px`;
+  placePopover(popover, {
+    rect,
+    scrollX,
+    scrollY,
+    popoverWidth: popover.offsetWidth,
+    badgeHeight: entry.element.offsetHeight,
+    viewportWidth: document.documentElement.clientWidth,
+  });
 }
 
 /** The image's alt text, when it has one — the only page-provided handle
  * that can tell "which image is this about?" to a keyboard or screen-reader
  * user, whose badge buttons otherwise all read alike (the overlay host
- * lives at the end of the tab order, far from the images). */
-function altOf(image: HTMLImageElement): string {
-  return image.getAttribute("alt")?.trim() ?? "";
-}
-
-function badgeLabel(verdict: WireVerdict, image: HTMLImageElement): string {
-  const label = VERDICT_LABELS[verdict.verdict];
-  const alt = altOf(image);
-  return alt ? `${label} — ${alt}` : label;
-}
-
-function popoverLabel(verdict: WireVerdict, image: HTMLImageElement): string {
-  const label = VERDICT_LABELS[verdict.verdict];
-  const alt = altOf(image);
-  return alt ? `${label} — details for “${alt}”` : `${label} — details`;
+ * lives at the end of the tab order, far from the images). It rides as the
+ * accessible *description*, not part of the name: page-authored alt can be
+ * paragraph-length, and a bloated name is what voice-control users must
+ * speak to activate the control. */
+function syncAltDescription(element: Element, image: HTMLImageElement): void {
+  const alt = image.getAttribute("alt")?.trim() ?? "";
+  if (alt) element.setAttribute("aria-description", alt);
+  else element.removeAttribute("aria-description");
 }
 
 function closePopover(refocusBadge = false): void {
   if (!openPopover) return;
   const { image, element, dismiss } = openPopover;
+  // If keyboard focus is inside the departing panel, removal would drop it
+  // to <body> and the next Tab would restart from the top of the page —
+  // hand it back to the badge instead, on every close path. (In Chrome the
+  // document-level activeElement is the retargeted host; the shadow root
+  // holds the real one.)
+  const active = shadowRoot?.activeElement ?? document.activeElement;
+  const hadFocus = active !== null && element.contains(active);
   openPopover = null;
   dismiss.abort();
   element.remove();
   const entry = badges.get(image);
   if (entry) {
     entry.element.setAttribute("aria-expanded", "false");
-    if (refocusBadge) entry.element.focus();
+    if (refocusBadge || hadFocus) entry.element.focus();
   }
+}
+
+/** True when a pointerdown sits in the root scrollbar gutter — outside the
+ * root element's client box. Chrome dispatches main-scrollbar drags as
+ * pointerdown targeting the root element; treating them as outside clicks
+ * would close the popover on the one scroll method that would otherwise
+ * bring it into view. (Inner-scroller scrollbars still read as outside
+ * interaction — closing there is ordinary light dismiss.) */
+function isRootScrollbarPointerdown(event: PointerEvent): boolean {
+  const root = document.documentElement;
+  if (event.target !== root || root.clientWidth === 0) return false;
+  const onVerticalScrollbar =
+    getComputedStyle(root).direction === "rtl"
+      ? event.clientX < window.innerWidth - root.clientWidth
+      : event.clientX >= root.clientWidth;
+  return onVerticalScrollbar || event.clientY >= root.clientHeight;
 }
 
 function openPopoverFor(image: HTMLImageElement): void {
@@ -284,7 +377,11 @@ function openPopoverFor(image: HTMLImageElement): void {
   const element = document.createElement("div");
   element.className = "popover";
   element.setAttribute("role", "dialog");
-  element.setAttribute("aria-label", popoverLabel(entry.verdict, image));
+  element.setAttribute(
+    "aria-label",
+    POPOVER_STRINGS.dialogLabel(VERDICT_LABELS[entry.verdict.verdict]),
+  );
+  syncAltDescription(element, image);
   element.append(buildPopoverContent(entry.verdict));
   // Inserted right after its badge so keyboard focus flows badge → panel.
   entry.element.after(element);
@@ -294,34 +391,55 @@ function openPopoverFor(image: HTMLImageElement): void {
   openPopover = { image, element, dismiss };
 
   // Light dismiss. Capture phase, because host pages routinely stop
-  // propagation at their own roots; Escape also returns focus to the badge
-  // and is consumed so it doesn't additionally dismiss page UI.
+  // propagation at their own roots.
   document.addEventListener(
     "pointerdown",
     (event) => {
       const path = event.composedPath();
       if (path.includes(element) || path.includes(entry.element)) return;
+      if (isRootScrollbarPointerdown(event)) return;
       closePopover();
     },
     { capture: true, signal: dismiss.signal },
   );
+  // Escape is scoped to the overlay: while the user is working in page UI
+  // (an input's autocomplete, an IME composition, a page dialog) the key
+  // belongs to the page, and the popover waits for light dismiss. From
+  // inside the overlay it is consumed fully — preventDefault stops native
+  // defaults (<dialog> cancel, fullscreen exit) and
+  // stopImmediatePropagation stops other document-level handlers — so one
+  // keypress dismisses exactly one layer. Page listeners capturing on
+  // window have already fired by now; that is out of reach from here.
   document.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
+      if (event.key !== "Escape" || event.isComposing) return;
+      const host = shadowRoot?.host;
+      if (!host || !event.composedPath().includes(host)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
       closePopover(true);
     },
     { capture: true, signal: dismiss.signal },
   );
+  // Cross-document iframes swallow pointer and key events, so neither
+  // listener above can ever fire while the user interacts with one — the
+  // panel would just hang open. Focus entering an iframe blurs this
+  // window; that is the one signal that does cross the boundary.
+  window.addEventListener(
+    "blur",
+    () => {
+      if (document.activeElement instanceof HTMLIFrameElement) closePopover();
+    },
+    { signal: dismiss.signal },
+  );
 
-  placePopover(
+  measureAndPlacePopover(
+    entry,
     element,
     image.getBoundingClientRect(),
     window.scrollX,
     window.scrollY,
-    element.offsetWidth,
-    entry.element.offsetHeight,
   );
 }
 
@@ -348,18 +466,16 @@ export function renderBadge(
   const root = ensureHost();
 
   let entry = badges.get(image);
+  const previousVerdict = entry?.verdict;
   if (!entry) {
     const element = document.createElement("button");
     element.type = "button";
     element.className = "badge";
     element.setAttribute("aria-haspopup", "dialog");
     element.setAttribute("aria-expanded", "false");
-    element.addEventListener("click", (event) => {
-      // The badge overlays host-page content (often inside a link); its
-      // clicks are ours alone.
-      event.stopPropagation();
-      togglePopover(image);
-    });
+    // Containment at the host boundary (ensureHost) keeps this and every
+    // other overlay event from the page's own handlers.
+    element.addEventListener("click", () => togglePopover(image));
     entry = { element, url, verdict };
     badges.set(image, entry);
     root.append(element);
@@ -368,8 +484,9 @@ export function renderBadge(
     entry.verdict = verdict;
   }
   entry.element.dataset["verdict"] = verdict.verdict;
+  // The visible label is the accessible name; alt text is the description.
   entry.element.textContent = VERDICT_LABELS[verdict.verdict];
-  entry.element.setAttribute("aria-label", badgeLabel(verdict, image));
+  syncAltDescription(entry.element, image);
 
   const rect = image.getBoundingClientRect();
   const { scrollX, scrollY } = window;
@@ -378,19 +495,31 @@ export function renderBadge(
   // A re-render while this image's popover is open must not leave stale
   // detail on screen.
   if (openPopover?.image === image) {
-    openPopover.element.setAttribute(
-      "aria-label",
-      popoverLabel(verdict, image),
-    );
-    openPopover.element.replaceChildren(buildPopoverContent(verdict));
-    placePopover(
-      openPopover.element,
-      rect,
-      scrollX,
-      scrollY,
-      openPopover.element.offsetWidth,
-      entry.element.offsetHeight,
-    );
+    if (isCollapsed(rect)) {
+      // Same rule the sync pass enforces: the badge just hid, and placing
+      // the panel against a zeroed rect would teleport it to the document
+      // origin, floating over unrelated content until the next sync.
+      closePopover();
+    } else {
+      openPopover.element.setAttribute(
+        "aria-label",
+        POPOVER_STRINGS.dialogLabel(VERDICT_LABELS[verdict.verdict]),
+      );
+      syncAltDescription(openPopover.element, image);
+      // Rebuild only on an actual verdict change: a same-verdict re-render
+      // (cached verdict, alt/position churn) must not detach focus from
+      // the panel or reset its disclosure state.
+      if (verdict !== previousVerdict) {
+        openPopover.element.replaceChildren(buildPopoverContent(verdict));
+      }
+      measureAndPlacePopover(
+        entry,
+        openPopover.element,
+        rect,
+        scrollX,
+        scrollY,
+      );
+    }
   }
 }
 
@@ -456,22 +585,25 @@ export function syncBadges(
     }
   }
   const { scrollX, scrollY } = window;
+  // Still the read phase: after the writes below, this read would force a
+  // synchronous reflow on every popover-open sync.
+  const viewportWidth = document.documentElement.clientWidth;
 
   for (const [element, rect] of moves) {
     positionAt(element, rect, scrollX, scrollY);
   }
   if (openPopover && popoverMove) {
-    if (popoverMove.rect.width < 1 || popoverMove.rect.height < 1) {
+    if (isCollapsed(popoverMove.rect)) {
       closePopover();
     } else {
-      placePopover(
-        openPopover.element,
-        popoverMove.rect,
+      placePopover(openPopover.element, {
+        rect: popoverMove.rect,
         scrollX,
         scrollY,
-        popoverMove.width,
-        popoverMove.badgeHeight,
-      );
+        popoverWidth: popoverMove.width,
+        badgeHeight: popoverMove.badgeHeight,
+        viewportWidth,
+      });
     }
   }
   for (const image of removed) {

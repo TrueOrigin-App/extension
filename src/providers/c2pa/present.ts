@@ -13,21 +13,16 @@ import type { C2paDetail } from "./mapping";
 
 export const C2PA_PROVIDER_ID = "c2pa";
 
-const REASONS: ReadonlySet<C2paDetail["reason"]> = new Set([
-  "no-c2pa-metadata",
-  "unsupported-format",
-  "invalid-manifest",
-  "ai-source-type",
-  "trusted-capture",
-  "untrusted-capture",
-  "no-origin-declaration",
-]);
-
 const SUMMARIES: Record<C2paDetail["reason"], string> = {
+  // Mirrors the verdict-level "ai-declared" wording (labels.ts): the
+  // reason also fires for a composite declaration on an ingredient
+  // manifest, and the signer/generator facts may name a later editor —
+  // so neither "created with AI" alone nor "the tool that made it" is
+  // safe to claim here.
   "ai-source-type":
     "This image carries Content Credentials — a signed, tamper-evident " +
-    "record from the tool that made it — declaring that it was created " +
-    "with AI.",
+    "record — declaring that it was made with AI or contains " +
+    "AI-generated material.",
   "trusted-capture":
     "This image carries Content Credentials signed by a capture device. " +
     "The signature is valid and the signer is on a recognized trust list.",
@@ -64,12 +59,16 @@ function sourceTypeLabel(uri: string): string {
 }
 
 /** The wire flattens detail to `unknown`; accept it only if it still looks
- * like the C2paDetail this provider emits. */
+ * like the C2paDetail this provider emits. SUMMARIES doubles as the reason
+ * whitelist: the Record type forces it exhaustive over C2paDetail["reason"],
+ * so a newly added reason cannot be silently rejected here — a
+ * hand-maintained Set would drift without a compile error. */
 function asC2paDetail(detail: unknown): C2paDetail | undefined {
   if (typeof detail !== "object" || detail === null) return undefined;
   const reason = (detail as { reason?: unknown }).reason;
-  if (typeof reason !== "string") return undefined;
-  if (!REASONS.has(reason as C2paDetail["reason"])) return undefined;
+  if (typeof reason !== "string" || !Object.hasOwn(SUMMARIES, reason)) {
+    return undefined;
+  }
   return detail as C2paDetail;
 }
 
