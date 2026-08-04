@@ -11,10 +11,20 @@ import {
   type AnalyzeResponse,
 } from "../messaging/protocol";
 import { activeProviders } from "../providers";
+import { contentHashKey, createVerdictCache } from "./verdict-cache";
 
-/** Runs one piece of media through the active provider set. */
-export function analyzeMedia(input: MediaInput): Promise<Verdict> {
-  return runPipeline(activeProviders, input);
+// Content-hash-keyed verdict cache (task 5.2): repeated analyses of the
+// same bytes — other tabs, page reloads, URL aliases — skip the WASM run
+// for the worker's lifetime. The URL-keyed layer lives in the content
+// script; retention policy and key shape are in verdict-cache.ts.
+const verdictCache = createVerdictCache();
+
+/** Runs one piece of media through the active provider set, serving
+ * repeated content from the worker-lifetime verdict cache. Concurrent
+ * requests for the same bytes share one pipeline run. */
+export async function analyzeMedia(input: MediaInput): Promise<Verdict> {
+  const key = await contentHashKey(input);
+  return verdictCache.getOrRun(key, () => runPipeline(activeProviders, input));
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

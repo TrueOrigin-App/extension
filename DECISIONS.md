@@ -1128,3 +1128,276 @@ displays that URL.**
   comments (suppressions belong in one reviewable config place);
   ignoring the rule project-wide (it must stay active for real UI
   surfaces — the 5.3 popup ships actual `<img>` tags).
+
+## 2026-08-03 — Task 5.2: verdict caching per URL/content-hash, double-fetch collapse
+
+Plan.md §4 asks for verdicts "cached per URL/content-hash"; both keys now
+exist, as two layers with different lifetimes, built on one shared
+primitive. No new permissions, no protocol changes, no changes outside the
+existing layers.
+
+### One primitive, two layers (`src/lib/coalescing-lru.ts`)
+
+- **What:** `CoalescingLruCache` — async memo with in-flight coalescing
+  (concurrent `getOrRun` calls for one key share one run), a `retain`
+  gate on resolved values, never-cached rejections, and LRU eviction.
+  Two instances:
+  - **Content script, URL-keyed** (`verdictsByUrl`, 200 entries,
+    page-view lifetime): keyed by the same analyzed-URL identity badges
+    carry, exactly as the 5.1 review note prescribed. Duplicate same-URL
+    images share one analysis (the coalescing 5.1 deferred here), and the
+    rescans spurious invalidations trigger are absorbed as cache hits.
+  - **Worker, content-hash-keyed** (`src/background/verdict-cache.ts`,
+    256 entries, worker lifetime): key is SHA-256 of the bytes plus the
+    declared MIME type (an analysis input — same bytes parse differently
+    under a different type). Serves the same image under a different URL,
+    from another tab, or across a reload while the worker lives.
+    `sourceUrl` is deliberately absent from the key — the pipeline's
+    output depends only on bytes and MIME type (verified: provider detail
+    is derived from the manifest store alone), so URL aliasing must not
+    fragment the cache.
+- **Why in-memory, not persistent:** `chrome.storage` is a permission ask
+  (§8) and a dent in the zero-permission posture; persisting a
+  browsing-derived URL→verdict map to disk is also a new privacy surface
+  for marginal gain — re-analysis after a worker restart costs one local
+  WASM run against the already-cached HTTP entry and 24h-cached trust
+  lists. Revisit only if soak shows real cost. `src/lib/` is a new
+  directory for context-neutral utilities: core stays verdict-domain,
+  and both the content script and worker import the primitive.
+- **Cap sizes (200/256) are provisional** like the other tuning
+  constants; entries are one verdict object each, so the bounds only
+  guard pathological sessions (infinite scroll, image-heavy browsing).
+- **Rejected:** Cache API for verdicts (URL-keyed Response store fits
+  trust lists, not hash-keyed JSON, and persistence is unwanted per
+  above); coalescing in the scheduler (it stays identity-blind; URL
+  identity is the content script's business).
+
+### Retention and retry policy (the 5.1 open item)
+
+- **What:** only failure-free verdicts are cached, in both layers; a
+  verdict carrying `ProviderFailure`s renders as before but reflects a
+  transient condition (WASM init failure, trust-list outage) that must
+  not be replayed after it clears. Rejections (fetch/CORS/protocol
+  errors) are never cached and propagate to every coalesced caller.
+  Within a page view a failed element stays terminal (scheduler "done",
+  unchanged from 5.1) — but the failure is not remembered by URL, so
+  another same-URL element, any identity invalidation, or the next page
+  view retries fresh.
+- **Why not retry-on-viewport-re-entry:** the dominant failure class
+  until 5.5 is strict-CORS byte acquisition, which is deterministic per
+  URL — blind in-view retries would refetch on every scroll pass for
+  nothing.
+- **The review's "aborted runs must skip cache writes" concern
+  dissolved:** `fetchAndAnalyze` is element-independent by design — its
+  result is a claim about a URL, valid regardless of what happened to
+  the element that wanted it (a mid-flight src swap means the verdict
+  describes the _old_ URL, which is precisely what the cache key says).
+  Element staleness is still enforced at badge time by the existing
+  generation/URL rechecks.
+- **data:/blob: URLs bypass the URL layer:** a data: URL as a Map key
+  would retain the full payload string; the worker's hash layer dedupes
+  their analysis regardless.
+
+### Double-fetch collapse: analysis fetch is `cache: "force-cache"`
+
+- **What:** the content-script byte fetch now reuses the HTTP-cache entry
+  the render stored, regardless of freshness. Content-script fetches
+  share the page's cache partition, and the Accept header pinned in 5.1
+  keeps `Vary: Accept` entries matching — so the doubled requests
+  observed at the task-4 checkpoint collapse to one network fetch per
+  image (analysis reads from disk/memory cache). Where no entry exists
+  (`no-store`, eviction), the fetch falls through to the network — one
+  fetch total, same as before.
+- **Why this is also a correctness fix:** default cache mode may
+  revalidate and be served a _newer_ representation than the one on
+  screen; force-cache pins the analysis to the bytes the render actually
+  stored. The verdict must describe what the user sees.
+- **Rejected:** worker-side fetch under the new host permissions —
+  Chrome's HTTP cache is partitioned by top-frame site, so an extension
+  service worker fetch can never hit the page's cache entry
+  (guaranteeing a second network fetch, the opposite of the goal), and
+  it drops page-context cookies/referer some CDNs require. Worker-side
+  fetch remains the _fallback_ story for strict-CORS hosts (task 5.5),
+  not the primary path.
+
+### Test page
+
+- A duplicate ai_declared.png figure exercises same-URL coalescing; the
+  audit checklist adds the page-panel check (each fixture: one network
+  request, one from-cache request) and `serve.mjs` logs one line per hit
+  so the collapse is verifiable server-side too.
+
+## 2026-08-03 — Task 5.2 follow-ups (same PR): CI workflow, audit-text tiers
+
+### GitHub Actions CI: the checks become a merge gate
+
+- **What:** `.github/workflows/ci.yml` runs `npm ci`, typecheck,
+  `format:check`, the test suite, and the build on every pull request
+  and on pushes to main. Single job, Node 24 (current LTS), read-only
+  token.
+- **Why:** the egress allowlist and taxonomy tests only guard anything
+  when they run, and until now that relied on the CLAUDE.md
+  run-tests-before-done convention — discipline, not machinery. A
+  public repo whose privacy story is "audit the free tier yourself"
+  (plan.md §7) should also show its checks passing in public. The suite
+  is CI-clean by design: the WASM integration tests stub all network,
+  so no secrets and no egress are needed.
+- **Owner action noted:** a green check only gates merges once branch
+  protection requires it — that is a GitHub settings toggle, not repo
+  code; flip it after this PR's run appears.
+- **Rejected:** a Node version matrix (single dev toolchain; esbuild
+  output is what ships; a matrix adds minutes for no signal);
+  release/packaging automation (nothing to release until the store
+  listing, Phase 3).
+
+### Service-worker audit text describes all three cache tiers
+
+- **What:** the test page's worker-panel expectations now enumerate the
+  three warmth tiers — cold worker + cold trust cache (five trust
+  fetches + cloud.jpg's manifest fetch), cold worker within 24 h
+  (manifest fetch only), warm worker (possibly zero requests).
+- **Why:** the previous text promised the cloud.jpg manifest fetch on
+  every warm run — true before 5.2, falsified by the worker verdict
+  cache (a warm-worker reload serves cloud.jpg's verdict from the hash
+  cache and never re-analyzes). An audit checklist that mispredicts the
+  expected picture generates phantom regressions during the soak.
+
+## 2026-08-03 — Task 5.2 code-review fixes (same PR)
+
+An adversarial review of this branch surfaced 13 verified findings; the
+confirmed ones are fixed here. Everything below is free-choice territory
+(no permission changes, no new dependencies, no SignalProvider /
+SignalResult changes, no user-facing wording).
+
+### Remote-manifest outages are provider failures (supersedes task 4)
+
+- **What:** `RemoteManifestFetch` errors no longer map to finding "none"
+  with detail reason `remote-manifest-unavailable`; the provider throws,
+  the aggregator records a `ProviderFailure`, and the reason leaves the
+  `C2paDetail` union.
+- **Why:** the task-4 framing ("the check ran; the referenced provenance
+  was unreachable — an absence, not a failure") predates verdict caching.
+  Under 5.2 both retention gates key on `failures` alone, so the absence
+  framing let a transient network blip be cached as a durable,
+  failure-free "unknown" for the worker's lifetime — contradicting this
+  PR's own retention policy. As a failure the verdict renders the same
+  Unknown badge but is never cached, so the next analysis retries the
+  fetch once the condition clears.
+- **Cost accepted:** a permanently missing remote manifest (durable 404)
+  is refetched on every analysis instead of cached — pre-5.2 parity.
+- **Popup note (5.3):** the outage stays disclosable; it now arrives as a
+  failure message (`C2PA read failed: … RemoteManifestFetch …`) instead
+  of a detail reason.
+
+### URL-cache soundness for bytes that rotate under a stable URL
+
+- **What:** two guards on `verdictsByUrl`. (1) The retain gate also
+  requires the analyzed response to be _pinnable_: a `no-store` response
+  (live images, webcams) can serve different bytes on every fetch, so its
+  verdict is good for exactly the analysis that produced it. (2)
+  `invalidateScan()` evicts the entry for the element's current URL, so
+  an identity invalidation re-fetches instead of replaying a verdict
+  about older bytes — usually straight from disk cache, with the worker's
+  hash layer still absorbing the WASM run when bytes are unchanged.
+- **Why:** the review demonstrated a same-URL rotating image keeping its
+  t0 badge for the whole page view (an "AI — declared" badge over an
+  unrelated later frame). This narrows the original 5.2 claim that
+  spurious invalidations are "absorbed as cache hits": duplicate-element
+  absorption — the dominant win — is unchanged, but invalidation-driven
+  rescans now pay one cheap refetch for honesty.
+
+### force-cache falls back past CORS-unusable cache entries
+
+- **What:** when the force-cache analysis fetch rejects with a
+  `TypeError`, it is retried once with `cache: "no-cache"`.
+- **Why:** Chrome's HTTP cache sits below the CORS layer
+  (crbug.com/409090): an entry stored by the no-cors `<img>` render on a
+  server that only emits `Access-Control-Allow-Origin` for Origin-bearing
+  requests (S3-style, no `Vary: Origin`) carries no CORS headers, and
+  force-cache serves it to the cors-mode analysis fetch as a
+  deterministic TypeError — where the pre-5.2 default-mode fetch would
+  have revalidated and succeeded. The fallback revalidates past the
+  unusable entry; its bytes may be newer than the render's (pre-5.2
+  behavior, accepted on this error path — the pinned bytes are unreadable
+  here by definition). Other TypeErrors (offline, DNS) fail the same way
+  twice, quickly.
+
+### No badge for images that are not rendering
+
+- **What:** after settle, an image with `complete && naturalWidth === 0`
+  (error event fired, or already broken) is skipped — forgotten, not
+  terminal, so a scroll re-entry re-checks cheaply.
+- **Why:** force-cache serves stale prior-session entries regardless of
+  freshness, so with the origin unreachable the render fails (alt text)
+  while the analysis succeeds against the old cached 200 — a provenance
+  badge for bytes the user cannot see. A badge is a claim about displayed
+  content. The residual risk of a missed badge on odd `naturalWidth`
+  behavior (edge-case SVGs) is accepted: a silent miss is the honest
+  direction, a false claim is not.
+
+### Analysis failures: retry budget instead of terminal (supersedes 5.1/5.2)
+
+- **What:** a rejected analysis no longer marks the element permanently
+  done. Each scan cycle (generation) has `MAX_ANALYSIS_ATTEMPTS = 2`: the
+  first failure forgets the element so a later viewport re-entry retries;
+  the last is terminal for the cycle. Success and invalidation reset the
+  budget.
+- **Why:** the 5.1 rationale for terminal failures (deterministic
+  strict-CORS failures would retry-loop) assumed unbounded retries; a
+  budget of 2 bounds a deterministic failure to one extra attempt while
+  letting transient failures heal on the next scroll pass. This matters
+  more after 5.2: URL coalescing shares one rejection across every
+  concurrently joined same-URL element, so a single transient 503
+  terminally un-badged _all_ copies — and the old comment's claim that
+  another same-URL element "retries fresh" was false for exactly those
+  coalesced elements.
+
+### blob: URLs join the URL cache
+
+- **What:** only `data:` URLs bypass `verdictsByUrl`; `blob:` URLs now
+  cache like http(s).
+- **Why:** the data: exclusion exists because the URL _is_ the payload (a
+  Map key would retain megabytes of string). A blob: URL is a short
+  opaque handle to content that is immutable for the handle's lifetime;
+  excluding it charged every duplicate element the full
+  fetch + base64 + IPC + hash cost for no benefit.
+
+### Mechanical cleanups from the review
+
+- `MediaInput.bytes` is now `Uint8Array<ArrayBuffer>` (a free-choice
+  shape): every producer decodes into a fresh plain buffer, and the
+  tighter type lets `contentHashKey` hash the bytes directly instead of
+  copying the full buffer per analysis just to satisfy `BufferSource`.
+- The two textually identical retain predicates collapsed into
+  `isCacheableVerdict` (`core/types.ts`) — structural on `failures`, so
+  one policy site types against both `Verdict` and `WireVerdict`.
+- `VerdictCache` (a single-caller class wrapper) is replaced by
+  `createVerdictCache()` returning a configured `CoalescingLruCache`;
+  the class added nothing beyond `contentHashKey` plus configuration.
+  Its tests that duplicated the primitive's suite were dropped; the
+  key-shape and retention-wiring tests remain.
+- `IMAGE_ACCEPT` and `mimeTypeFor` moved to `src/lib/image-accept.ts`:
+  task 5.5's worker-side fallback needs the identical Accept header for
+  the identical `Vary: Accept` reason, and a file-local constant invited
+  a drifting second copy. The pin's silent-drift failure mode (Chrome
+  revising its default header un-matches cached entries with no signal)
+  is now documented at the constant. The `.impeccable/config.json`
+  `broken-image` ignore extends to the new file — same
+  comments-mention-`<img>` false positive as content/index.ts.
+- `CoalescingLruCache.delete()` added for the invalidation eviction.
+- Test-page audit text: the worker-panel instructions now state the
+  observer effect (an open worker inspector pins the worker alive, so
+  the ~30 s teardown separating the tiers never happens while watching)
+  and give the close-wait-reopen recipe for reproducing the cold tiers.
+
+### Deferred review findings (recorded, intentionally not fixed here)
+
+- **Degraded verdicts still badge:** a failure-carrying verdict renders
+  Unknown and the element goes terminal, while both caches refuse to
+  retain it — the review called this two-layer policy incoherence
+  (largely pre-5.2). Whether a degraded check should badge at all, and
+  how failures split into deterministic vs transient classes, is 5.3
+  popup / Phase 3 wording territory; revisit alongside 5.5.
+- **Accept-header drift** has no code-level fix (Chrome's default is not
+  introspectable); mitigated by documentation at the constant and the
+  soak-time network audit.

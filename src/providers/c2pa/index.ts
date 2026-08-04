@@ -75,7 +75,15 @@ function thrownMessage(thrown: unknown): string {
 }
 
 /** Maps read errors that mean "nothing usable here" (rather than "the check
- * broke") to an absence detail; returns undefined for genuine failures. */
+ * broke") to an absence detail; returns undefined for genuine failures.
+ *
+ * A RemoteManifestFetch error is deliberately NOT absence (this supersedes
+ * the task-4 framing, see DECISIONS.md): the asset references provenance
+ * that exists but was unreachable — a transient condition. Reported as an
+ * absence it produced a failure-free "unknown" that the task-5.2 verdict
+ * caches retained for the worker's lifetime; as a ProviderFailure the
+ * verdict renders the same but is never cached, so the next analysis
+ * retries the fetch. */
 function absenceDetail(thrown: unknown): C2paDetail | undefined {
   const message = thrownMessage(thrown);
   if (message.includes("JumbfNotFound")) {
@@ -83,13 +91,6 @@ function absenceDetail(thrown: unknown): C2paDetail | undefined {
   }
   if (message.includes("UnsupportedType")) {
     return { reason: "unsupported-format" };
-  }
-  // The asset references a remote manifest that could not be retrieved
-  // (offline, 404, or CORS-blocked until broad host permissions land in
-  // task 4/5). The check ran; the referenced provenance was unreachable —
-  // that is an absence the popup can disclose, not a provider failure.
-  if (message.includes("RemoteManifestFetch")) {
-    return { reason: "remote-manifest-unavailable" };
   }
   return undefined;
 }

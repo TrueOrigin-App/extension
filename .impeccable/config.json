@@ -7,10 +7,11 @@
         "rule": "broken-image",
         "value": "*",
         "files": [
-          "src/content/index.ts"
+          "src/content/index.ts",
+          "src/lib/image-accept.ts"
         ],
         "createdAt": "2026-08-03T21:12:59.004Z",
-        "reason": "Content script with no markup; its comments mention <img>/<source> elements it processes on host pages — user confirmed false positive"
+        "reason": "Modules with no markup; their comments mention the <img>/<source> elements the content script processes on host pages — user confirmed false positive (image-accept.ts inherited the comment when the constant moved out of content/index.ts)"
       }
     ]
   }

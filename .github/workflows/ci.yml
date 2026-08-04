@@ -1,0 +1,29 @@
+# CI: every check the repo already defines, run as a merge gate. This is
+# what turns the egress allowlist and taxonomy tests from a local
+# convention into machinery — and public green checks are part of the
+# "audit the free tier yourself" story (plan.md §7). The WASM integration
+# tests stub all network, so the suite is CI-clean by design.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build

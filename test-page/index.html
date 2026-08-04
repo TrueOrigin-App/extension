@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>TrueOrigin — task 4 test page</title>
+    <title>TrueOrigin — test page</title>
     <style>
       body {
         font:
@@ -72,11 +72,24 @@
       <figcaption>
         <strong>cloud.jpg</strong> — carries only a remote manifest URL
         (<code>cai-manifests.adobe.com</code>). Expected badge:
-        <em>Unknown</em> either way; the interesting part is the console reason
-        — a successful fetch validates whatever the manifest says, while a
-        CORS-blocked or unreachable fetch shows
-        <code>remote-manifest-unavailable</code>. This is the task-4
-        remote-manifest CORS reality check.
+        <em>Unknown</em> either way; the interesting part is the console — a
+        successful fetch validates whatever the manifest says, while an
+        unreachable fetch (offline, blocked) records a provider failure in the
+        verdict's <code>failures</code>, which also keeps the degraded verdict
+        out of both verdict caches so a later analysis retries the fetch.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <img
+        src="/fixtures/ai_declared.png"
+        alt="AI-declared fixture, duplicate"
+      />
+      <figcaption>
+        <strong>ai_declared.png (duplicate)</strong> — same URL as the first
+        figure, for the task-5.2 verdict cache: it must badge
+        <em>AI — declared</em> from the shared analysis, with no extra fixture
+        request in the page network panel.
       </figcaption>
     </figure>
 
@@ -84,13 +97,44 @@
     <p>
       Inspect the <strong>service worker's</strong> network activity
       (chrome://extensions → TrueOrigin → “Inspect views: service worker” →
-      Network tab). Expected on a cold run: five trust-list fetches (<code
-        >verify.contentauthenticity.org</code
-      >
-      ×3, <code>raw.githubusercontent.com</code> ×2) plus the
-      <code>cai-manifests.adobe.com</code> fetch triggered by cloud.jpg. Within
-      24 h (warm cache): only the cloud.jpg manifest fetch. Nothing else — no
-      media bytes, no page URLs.
+      Network tab). What appears depends on two caches — the 24 h trust-list
+      cache and the worker's in-memory verdict cache, which lives until Chrome
+      stops the idle worker (~30 s). <strong>Observer effect:</strong> an open
+      worker inspector pins the worker alive, so the idle teardown separating
+      the tiers never happens while you watch — repeated reloads with the
+      inspector open stay in the warm tier. To reproduce a cold-worker tier:
+      close the worker DevTools, wait for the “Inspect views” line to read
+      <em>(inactive)</em>, reopen the inspector (this restarts the worker with
+      an empty verdict cache), then reload this page.
+    </p>
+    <ul>
+      <li>
+        <strong>Cold worker, cold trust cache</strong> (first run in 24 h): five
+        trust-list fetches (<code>verify.contentauthenticity.org</code> ×3,
+        <code>raw.githubusercontent.com</code> ×2) plus the
+        <code>cai-manifests.adobe.com</code> fetch triggered by cloud.jpg. The
+        trust cache persists (Cache API), so a worker restart alone does not
+        return here.
+      </li>
+      <li>
+        <strong>Cold worker, warm trust cache</strong> (worker restarted via the
+        recipe above, within 24 h): only the cloud.jpg manifest fetch.
+      </li>
+      <li>
+        <strong>Warm worker</strong> (any reload while the inspector stays open,
+        or within ~30 s of the last analysis): possibly no requests at all — the
+        task-5.2 verdict cache recognizes the image bytes and skips re-analysis,
+        including the manifest fetch.
+      </li>
+    </ul>
+    <p>In every tier, nothing else — no media bytes, no page URLs.</p>
+    <p>
+      In the <strong>page's</strong> network panel (task 5.2, double-fetch
+      collapse): each fixture URL appears exactly twice — the render request
+      from the network, then the analysis fetch served from
+      <em>(disk cache)</em> / <em>(memory cache)</em>, never from the server.
+      The duplicate figure above adds no request of its own. The server logs one
+      hit per fixture per load.
     </p>
   </body>
 </html>
