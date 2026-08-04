@@ -158,6 +158,16 @@
       <em>(inactive)</em>, reopen the inspector (this restarts the worker with
       an empty verdict cache), then reload this page.
     </p>
+    <p>
+      First, one request appears in <strong>every</strong> tier: the strict-CORS
+      figure's fallback fetch to <code>127.0.0.1:8917</code>
+      (task 5.5), once per page view, after that figure scrolls into view.
+      Neither cache can skip it — the worker's content-hash cache can only
+      recognize bytes it has already fetched, and the page-view URL cache that
+      would skip the fetch dies with the page. (The worker panel also
+      accumulates entries across page reloads while the inspector is open, so N
+      reloads leave N of these listed.) Beyond that, the tiers differ:
+    </p>
     <ul>
       <li>
         <strong>Cold worker, cold trust cache</strong> (first run in 24 h): five
@@ -173,17 +183,16 @@
       </li>
       <li>
         <strong>Warm worker</strong> (any reload while the inspector stays open,
-        or within ~30 s of the last analysis): possibly no other requests — the
+        or within ~30 s of the last analysis): no additional requests — the
         task-5.2 verdict cache recognizes the image bytes and skips re-analysis,
         including the manifest fetch.
       </li>
     </ul>
     <p>
-      In <em>every</em> tier, the strict-CORS figure adds one
-      <code>127.0.0.1:8917</code> fetch (task 5.5): the worker must acquire
-      those bytes on each page view before its content-hash cache can even
-      recognize them — the page-view URL cache that would skip it dies with the
-      page. Beyond that, nothing else — no media bytes, no page URLs.
+      In every tier, nothing else — no media bytes, no page URLs. A
+      <code>localhost:8917</code> fixture URL appearing in the worker panel
+      would be a bug (the fallback firing for a same-origin image), as would
+      more than one <code>127.0.0.1</code> fetch per page view.
     </p>
     <p>
       In the <strong>page's</strong> network panel (task 5.2, double-fetch
