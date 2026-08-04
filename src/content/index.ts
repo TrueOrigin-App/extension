@@ -239,10 +239,7 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     return;
   }
 
-  // Full evidence in the console for now; the popup's progressive
-  // disclosure (task 5.3) is the real home for this detail.
-  console.info(LOG_PREFIX, url, verdict);
-  renderBadge(image, verdict.verdict, url);
+  renderBadge(image, verdict, url);
   failedAttempts.delete(image);
 }
 
