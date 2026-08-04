@@ -145,6 +145,17 @@ describe("popover", () => {
     expect(style).toContain(".evidence[hidden]");
   });
 
+  it("pins the explicit direction reset (all:initial excludes direction)", () => {
+    // Regression pin: the CSS "all" property excludes direction and
+    // unicode-bidi by spec, so without an explicit reset an RTL host page
+    // re-orders the overlay's English text (verified live). jsdom doesn't
+    // cascade shadow stylesheets, so pin the stylesheet text.
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const style = host()?.shadowRoot?.querySelector("style")?.textContent;
+    expect(style).toContain("direction: ltr");
+  });
+
   it("describes badge and popover with the image's alt text when present", () => {
     const image = makeImage("https://example.com/a.jpg");
     image.alt = "Sunset over hills";
@@ -271,6 +282,43 @@ describe("popover", () => {
         bubbles: true,
         clientX: 400,
         clientY: 100,
+      }),
+    );
+    expect(popoverElements()).toHaveLength(0);
+  });
+
+  it("does not treat an overlay-scrollbar drag as an outside click", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    // Overlay scrollbars (macOS default) take no layout space: clientWidth
+    // equals innerWidth and the thumb floats inside the client box along
+    // the window edge (verified live — the gutter test alone never fires).
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(
+      window.innerWidth,
+    );
+    vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(
+      600,
+    );
+    vi.spyOn(document.documentElement, "scrollHeight", "get").mockReturnValue(
+      2000,
+    );
+    document.documentElement.dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        clientX: window.innerWidth - 8,
+        clientY: 300,
+      }),
+    );
+    expect(popoverElements()).toHaveLength(1);
+
+    // Away from the edge band, a root-targeted click still closes.
+    document.documentElement.dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        clientX: 500,
+        clientY: 300,
       }),
     );
     expect(popoverElements()).toHaveLength(0);

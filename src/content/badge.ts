@@ -55,12 +55,16 @@ const CONTAINED_EVENT_TYPES = [
 const BADGE_STYLE = `
   /* The shadow boundary stops page selectors but not inheritance: page
      rules matching the host div (html, div, *) compute on it and inherit
-     into the tree — direction, letter-spacing, text-transform, and the
-     rest. "all: initial" on both roots cuts that off; every property the
+     into the tree — letter-spacing, text-transform, and the rest.
+     "all: initial" on both roots cuts that off; every property the
      overlay needs is re-declared after it, and descendants inherit from
-     these reset roots. */
+     these reset roots. "all" excludes direction/unicode-bidi by spec
+     (verified live: an RTL page re-ordered the popover text through the
+     reset), so direction is reset explicitly — the overlay's strings are
+     English until localization work. */
   .badge {
     all: initial;
+    direction: ltr;
     position: absolute;
     box-sizing: border-box;
     display: inline-flex;
@@ -91,6 +95,7 @@ const BADGE_STYLE = `
   }
   .popover {
     all: initial;
+    direction: ltr;
     display: block;
     position: absolute;
     z-index: 1;
@@ -353,20 +358,43 @@ function closePopover(refocusBadge = false): void {
   }
 }
 
-/** True when a pointerdown sits in the root scrollbar gutter — outside the
- * root element's client box. Chrome dispatches main-scrollbar drags as
- * pointerdown targeting the root element; treating them as outside clicks
- * would close the popover on the one scroll method that would otherwise
- * bring it into view. (Inner-scroller scrollbars still read as outside
- * interaction — closing there is ordinary light dismiss.) */
+/** Width of the edge band treated as an overlay scrollbar. Chrome's
+ * overlay thumb is ~15px at its hover width; 17 adds slack. */
+const OVERLAY_SCROLLBAR_BAND_PX = 17;
+
+/** True when a pointerdown is a main-scrollbar drag rather than an outside
+ * click. Chrome dispatches these as pointerdown targeting the root
+ * element; treating them as outside clicks would close the popover on the
+ * one scroll method that would otherwise bring it into view.
+ *
+ * Two scrollbar realities (both verified live): classic scrollbars occupy
+ * a gutter outside the root's client box; overlay scrollbars (the macOS
+ * default) take no layout space at all — the thumb floats inside the
+ * client box along the window edge, detected here by edge proximity while
+ * the document actually scrolls on that axis. A rare genuine root-targeted
+ * click inside that band merely leaves the popover open. Inner-scroller
+ * scrollbars still read as outside interaction — closing there is
+ * ordinary light dismiss. */
 function isRootScrollbarPointerdown(event: PointerEvent): boolean {
   const root = document.documentElement;
-  if (event.target !== root || root.clientWidth === 0) return false;
-  const onVerticalScrollbar =
-    getComputedStyle(root).direction === "rtl"
-      ? event.clientX < window.innerWidth - root.clientWidth
-      : event.clientX >= root.clientWidth;
-  return onVerticalScrollbar || event.clientY >= root.clientHeight;
+  if (event.target !== root) return false;
+  const rtl = getComputedStyle(root).direction === "rtl";
+  const gutter = window.innerWidth - root.clientWidth;
+  if (gutter > 0) {
+    return (
+      (rtl ? event.clientX < gutter : event.clientX >= root.clientWidth) ||
+      event.clientY >= root.clientHeight
+    );
+  }
+  const scroller = document.scrollingElement ?? root;
+  const nearVerticalEdge = rtl
+    ? event.clientX <= OVERLAY_SCROLLBAR_BAND_PX
+    : event.clientX >= window.innerWidth - OVERLAY_SCROLLBAR_BAND_PX;
+  return (
+    (scroller.scrollHeight > root.clientHeight && nearVerticalEdge) ||
+    (scroller.scrollWidth > root.clientWidth &&
+      event.clientY >= window.innerHeight - OVERLAY_SCROLLBAR_BAND_PX)
+  );
 }
 
 function openPopoverFor(image: HTMLImageElement): void {

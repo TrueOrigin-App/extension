@@ -1632,3 +1632,29 @@ are fixed here. Free-choice decisions made while fixing:
   bounds the damage to z-index-based overlays that happen to overlap the
   24px pill. Accepted for the soak; revisit with Phase 3 (a smaller
   badge, or a yield-on-cover heuristic informed by real sites).
+
+### Live-pass corrections (same session, after the review fixes)
+
+A driven browser pass on the test page (real clicks/keys, not synthetic
+dispatch) verified the review fixes and caught two bugs jsdom could not:
+
+- **`all: initial` does not reset `direction`.** The CSS `all` property
+  excludes `direction` and `unicode-bidi` by spec, so the RTL leak — the
+  most consequential part of the inheritance finding — survived the
+  reset: with `dir="rtl"` on the page, popover text re-ordered while
+  letter-spacing/text-transform/text-align were correctly cut off. Fixed
+  with explicit `direction: ltr` on both shadow roots, pinned by a
+  stylesheet test.
+- **Overlay scrollbars defeat the gutter test.** On macOS (the default),
+  scrollbars occupy zero layout width — `clientWidth === innerWidth` —
+  so "pointerdown outside the root's client box" can never match, and a
+  main-scrollbar drag still closed the popover. The guard now covers
+  both realities: the classic gutter when one exists, otherwise a 17px
+  edge band on axes where the document actually scrolls. A rare genuine
+  root-targeted click inside that band merely leaves the popover open.
+- Verified live with trusted input: event containment (page-level spies
+  saw zero overlay events), Escape consumed from inside vs. delivered to
+  the page from outside, iframe-focus dismiss, alt-as-description +
+  `lang="en"`, the corrected "Unknown" copy coherent with its
+  disclosure, all five fixtures badging (including the remote-manifest
+  fetch path), zero console errors.
