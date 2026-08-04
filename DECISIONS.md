@@ -1658,3 +1658,49 @@ dispatch) verified the review fixes and caught two bugs jsdom could not:
   `lang="en"`, the corrected "Unknown" copy coherent with its
   disclosure, all five fixtures badging (including the remote-manifest
   fetch path), zero console errors.
+
+## 2026-08-03 — Task 5.4: Google Lens right-click — skipped as redundant
+
+### Owner decision (§8 ask, resolved instead of built)
+
+- **What:** task 5.4 ships nothing. The §8 permission ask was prepared
+  (`contextMenus` — Chrome's no-warning tier; image-URL-only egress to
+  `lens.google.com` on explicit click), but the owner's observation that
+  Chrome already ships a built-in **"Search with Google Lens"** image
+  context-menu item resolved the ask as _skip_: the manual escalation
+  path plan.md §5 wants already exists natively, in the exact gesture
+  the plan prescribes.
+- **Why the duplicate loses to the built-in:**
+  - The built-in item (Chrome ~M100+, default whenever Google is the
+    default search engine; now opens the Lens side panel) sends the
+    rendered image itself, so it works behind logins, cookie-gated CDNs,
+    and expiring signed URLs. The extension route would be a constructed
+    `lens.google.com/uploadbyurl?url=…` link that Google fetches
+    server-side — strictly weaker on exactly those images.
+  - Our entry would sit directly below Chrome's own and work less often:
+    menu clutter that erodes rather than builds trust.
+  - Even a warning-free permission must be justified in the store
+    listing's privacy story; a documented egress path for near-zero
+    incremental value is a bad trade against the minimum-permissions
+    posture (plan.md §4).
+- **Rejected:**
+  - _Build as planned_ — the only cohort served is users whose default
+    search engine is not Google (their menu says "Search image with
+    [engine]" instead). They chose that engine; force-inserting a
+    Google entry for them is dubious value for the cost above.
+  - _Popover Lens link now_ — permissionless and contextual, but
+    deferred rather than built: surfacing an escalation affordance on
+    (e.g.) Unknown verdicts is wording/placement territory, i.e.
+    Phase 3 brand work. **Recorded as the Phase 3 home for escalation:**
+    a contextual "look this image up" link in the badge popover is the
+    one form the built-in cannot provide.
+- **Consequences:**
+  - No manifest change; the zero-API-permissions posture holds and the
+    manifest test's "requests no API permissions" pin stands unchanged.
+  - No new egress paths; the constraint-3 network story is untouched.
+  - Plan.md §5 (free-tier table) and §8 (task order) still name the
+    feature — noted as plan drift for the owner to amend; the free-tier
+    "Open in Google Lens" line is fulfilled by the platform itself.
+  - Revisit only if Chrome removes or degrades the built-in item.
+  - Next per §8 order: task 5.5 (byte-acquisition CORS fallbacks),
+    informed by the daily-driver soak.

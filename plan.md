@@ -119,6 +119,8 @@ The boundary falls naturally along the signal-cost line — no artificial gating
 
 The **Google Lens right-click** feature (context menu → constructed Lens URL) is nearly free to build and gives free-tier users a manual escalation path when the verdict is Unknown.
 
+> **Update (2026-08-03):** resolved as **skipped** — Chrome ships a built-in "Search with Google Lens" item on image right-clicks (default whenever Google is the default search engine), which provides this escalation path natively and works on images a constructed `uploadbyurl` link could not reach (logins, cookie-gated CDNs, expiring signed URLs). Building our own would duplicate a stronger native item and cost a `contextMenus` permission for near-zero value. The differentiated form — a contextual "look this image up" link in the badge popover — is deferred to Phase 3. Full evaluation in DECISIONS.md (task 5.4).
+
 ---
 
 ## 6. Roadmap
@@ -203,7 +205,7 @@ This plan is standing context, not a one-shot spec. Work in scoped tasks; keep d
    1. Broad host access — opens with the §8 ask covering both `content_scripts` matches and `host_permissions`, with the optional-host-permissions alternative explicitly evaluated (owner directive, task 4) — then viewport lazy scanning and scan scheduling.
    2. Verdict caching per URL/content-hash (also collapses the render+analyze double-fetch observed at the task-4 checkpoint).
    3. Popup: verdict + explanation, progressive disclosure. The first `/impeccable init` pass (Phase 3 timing note) runs before this task so brand context is standing input.
-   4. Google Lens right-click (needs a `contextMenus` permission ask).
+   4. Google Lens right-click (needs a `contextMenus` permission ask). _Resolved 2026-08-03: skipped as redundant with Chrome's built-in Lens context-menu item — see the §5 update and DECISIONS.md; the popover-link variant is Phase 3 territory._
    5. Byte-acquisition edge cases (CORS fallbacks) — last, informed by daily-driver usage.
 
    During the daily-driver soak (§6 cadence note): acquire a real capture-signed photo from a trust-listed device (Leica/Sony/Pixel or a published Content Credentials sample) so "Human — verified" gets an end-to-end fixture like `ai_declared.png` — that verdict cannot be exercised with self-signed material by design.
