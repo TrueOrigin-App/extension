@@ -22,8 +22,8 @@ import { isCacheableVerdict } from "../core/types";
 import {
   ANALYZE_MESSAGE_TYPE,
   encodeBytes,
+  isAnalyzeResponse,
   type AnalyzeRequest,
-  type AnalyzeResponse,
   type WireVerdict,
 } from "../messaging/protocol";
 import { CoalescingLruCache } from "../lib/coalescing-lru";
@@ -155,7 +155,13 @@ async function fetchAndAnalyze(url: string): Promise<UrlCacheEntry> {
     mimeType,
     sourceUrl: url,
   };
-  const result = (await chrome.runtime.sendMessage(request)) as AnalyzeResponse;
+  const result: unknown = await chrome.runtime.sendMessage(request);
+  // Not a cast: the verdict below is cached and dereferenced again at
+  // badge-click time, so a malformed reply must take this handled failure
+  // path, not surface later as a TypeError inside a click handler.
+  if (!isAnalyzeResponse(result)) {
+    throw new Error("analysis failed: malformed worker reply");
+  }
   if (!result.ok) {
     throw new Error(`analysis failed: ${result.error}`);
   }
@@ -239,10 +245,7 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     return;
   }
 
-  // Full evidence in the console for now; the popup's progressive
-  // disclosure (task 5.3) is the real home for this detail.
-  console.info(LOG_PREFIX, url, verdict);
-  renderBadge(image, verdict.verdict, url);
+  renderBadge(image, verdict, url);
   failedAttempts.delete(image);
 }
 

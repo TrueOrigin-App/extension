@@ -1401,3 +1401,260 @@ SignalResult changes, no user-facing wording).
 - **Accept-header drift** has no code-level fix (Chrome's default is not
   introspectable); mitigated by documentation at the constant and the
   soak-time network audit.
+
+## 2026-08-03 — Task 5.3: the popup is a badge popover (verdict, explanation, disclosure)
+
+### Owner decisions (§8 asks, resolved before building)
+
+- **"Popup" means a badge-anchored popover, not a toolbar action popup.**
+  Clicking a badge opens a panel on the image itself with the verdict, a
+  plain-language explanation, and the "How do we know?" progressive
+  disclosure (plan.md §4). The owner confirmed this reading of §4/§6;
+  a toolbar (`action`) popup — a page-level list of verdicts — was
+  considered and deferred: it needs an answer to "which image is this
+  entry about?" (thumbnails would add extension-context refetches to the
+  audited network story), and there is no page-level content yet
+  ("nothing checked / can't run here" states, settings, paid tier).
+  Revisit when such content exists. Consequence: **no manifest changes at
+  all** — no `action` key, no new permissions, no protocol changes, and
+  the worker is untouched.
+- **Phase-2 placeholder presentation.** The popover extends the badge's
+  deliberately plain neutral styling; the visual world remains Phase 3
+  work (post-soak Impeccable pass), per plan.md's phasing.
+- **Placeholder copy in the brand voice**, extending the task-4 wording
+  decision: §2 labels verbatim as headlines; short, calm, honest
+  explanations with no C2PA jargon at the surface (jargon is allowed
+  inside the disclosure layer, where "Content Credentials" is named).
+  All strings live in `content/labels.ts` and
+  `providers/c2pa/present.ts`, marked placeholder; Phase 3 finalizes.
+  The §2 rules bind the content: "Unknown" never reads as "not AI", and
+  "AI — likely" is written as probabilistic.
+- Impeccable stays at v4.0.2 (update to v4.0.4 offered, declined for now).
+
+### Badges are now real buttons (pointer-events change)
+
+- **What:** the badge is a `<button>` with `pointer-events: auto`,
+  `cursor: pointer`, hover/focus states, and `min-height: 24px`
+  (WCAG 2.2 AA 2.5.8 target size). Clicks on it are consumed
+  (`stopPropagation`) — the host page never sees them.
+- **Why:** the popover needs a trigger, and the badge is the thing users
+  notice. Trade-off accepted: the badge's own pixels now capture clicks
+  that previously fell through to the page (often an image link).
+  Confined to the badge; everything else in the overlay stays
+  `pointer-events: none`.
+
+### Popover lifecycle (free choice)
+
+- One popover at a time; opening another closes the first. The panel is
+  inserted immediately after its badge in the shadow root, so keyboard
+  focus flows badge → panel; `aria-haspopup`/`aria-expanded` on the
+  badge, non-modal `role="dialog"` on the panel, disclosure via
+  `<button aria-expanded aria-controls>`.
+- Light dismiss: pointerdown outside or Escape (which refocuses the
+  badge), both registered capture-phase while open so host pages that
+  stop propagation at their own roots can't strand an open panel; both
+  torn down through one AbortController.
+- The panel closes when its image's badge goes away for any reason
+  (removed, stale URL, collapsed rect) and is re-adopted next to its
+  badge when a page-removed host is rebuilt; a re-render while open
+  refreshes the content in place. syncBadges keeps its single
+  read-then-write layout pass — popover width/badge height are read in
+  the read phase.
+- **Rejected:** hover-triggered popover (WCAG 1.4.13 hover machinery,
+  no touch affordance); `role="tooltip"` (the panel holds interactive
+  content).
+
+### Signal presenters live in the providers layer (constraint 4)
+
+- **What:** `src/providers/presenters.ts` maps a `SignalResult` to
+  `{ summary, facts }` via a per-provider registry;
+  `src/providers/c2pa/present.ts` is the C2PA presenter (humanized
+  source types, signer, trust status). Unknown providers get a generic
+  factual fallback (finding + confidence), pinned by test — so adding a
+  provider requires zero popover changes, and richer presentation is a
+  providers-layer edit.
+- **Purity constraint:** presenters bundle into the content script, so
+  they import types only — `C2PA_PROVIDER_ID` moved into `present.ts`
+  (re-exported from the provider index) to keep WASM machinery out of
+  the content bundle (verified: dist/content.js has no wasm references,
+  29.7 kB).
+
+### Degraded verdicts are disclosed (5.2 deferred finding, disclosure half)
+
+- A verdict carrying provider failures now shows "part of this check
+  didn't finish, so this result may be incomplete" in the popover, with
+  each failure listed inside the disclosure. Whether a degraded check
+  should badge at all (the policy half) still belongs with 5.5.
+- The content script's full-verdict `console.info` is removed — the
+  popover is the home task 4 promised for that detail; failures still
+  log under `[TrueOrigin]`. Test-page copy updated accordingly, plus a
+  popover checklist section.
+
+### Task 5.3 finish-review fixes (same session)
+
+A finish-review pass (general-purpose agent substituting for the
+impeccable finish reviewer, which this harness doesn't ship) confirmed
+taxonomy honesty, computed AA contrast on every color pair, target sizes,
+and constraint 4 — and surfaced four findings, fixed immediately:
+
+- **Disclosure could never visually collapse:** `.evidence`'s
+  `display: grid` (author origin) overrode the UA's `[hidden]` rule, so
+  the evidence rendered expanded regardless of the toggle. Fixed with an
+  explicit `.evidence[hidden] { display: none }`; pinned by a stylesheet
+  test, since jsdom asserts the attribute, not computed display.
+- **Privacy note overclaimed for remote-manifest assets:** "the image
+  never left your machine" implied no per-image network activity, but
+  remote-manifest assets trigger the disclosed reference fetch. Reworded
+  to claim only what always holds ("The image itself never left your
+  machine — the check ran on this device"); per-image disclosure of the
+  manifest fetch remains Phase 3.
+- **Badge buttons were context-free for keyboard/screen-reader users**
+  (the overlay host sits at the end of the tab order, so an image-heavy
+  page yields a run of identical verdict buttons): the image's alt text,
+  when present, now joins the badge and popover `aria-label`s.
+- **"AI — declared" explanation overstated composites:** an ingredient's
+  `compositeWithTrainedAlgorithmicMedia` declaration read as "created
+  with AI" and misattributed the statement to "the maker". Now: "This
+  image carries a signed statement that it was made with AI or contains
+  AI-generated material."
+- Minor: popover gets `z-index: 1` (a later-rendered badge could paint
+  over it); the disclosure caret uses `content: "▸" / ""` so screen
+  readers skip it.
+- Recorded, not fixed (placeholder-acceptable): no vertical flip near the
+  page bottom (max-height + page scroll bound it); `replaceChildren` on
+  re-render-while-open resets disclosure state; raw provider ids/error
+  strings inside the disclosure (a display-name field in the presenters
+  registry is the constraint-4-clean Phase 3 fix); keyboard-only
+  scrolling of an overflowing evidence list.
+
+## 2026-08-03 — Task 5.3 code-review fixes (post-merge review, 15 findings)
+
+A multi-agent code review of the 5.3 branch (10 finder angles, adversarial
+verification) confirmed 13 findings and carried 2 plausible ones; all 15
+are fixed here. Free-choice decisions made while fixing:
+
+### Copy corrections (placeholder status unchanged; Phase 3 still finalizes)
+
+- **"Unknown" explanation** now says "No _usable_ provenance information
+  was found" — the §2 definition. The old "No provenance information was
+  found" was false for three of the four C2PA reasons mapping to Unknown
+  (invalid-manifest, untrusted-capture, no-origin-declaration: credentials
+  were found, they just weren't usable) and self-contradicted the
+  disclosure text under it.
+- **C2PA `ai-source-type` summary** re-worded to mirror the approved
+  verdict-level "ai-declared" copy ("made with AI or contains AI-generated
+  material", no "from the tool that made it"): the reason also fires on
+  composite declarations from ingredient manifests, and the signer/
+  generator facts can name a later editor, so the old sentence repeated
+  the exact composite overclaim this task fixed in labels.ts.
+
+### Overlay containment and dismissal (badge.ts)
+
+- **Event containment at the host boundary:** discrete interaction events
+  (pointer up/down/cancel, mouse, click/aux/dbl, contextmenu, touch,
+  key, wheel) are stopPropagation'd on the host div in the bubble phase,
+  replacing the single click-only stopPropagation. Previously every other
+  overlay event retargeted to the host and reached page document/window
+  handlers — closing page dropdowns via their outside-click handlers.
+  Move streams (pointermove/mousemove) deliberately still flow: pages
+  track those continuously and a badge-sized dead zone is its own bug.
+- **Escape is scoped to the overlay and fully consumed.** It closes the
+  popover only when the keypress originates inside the overlay (badge or
+  panel), with an `isComposing` guard, `preventDefault` (stops native
+  `<dialog>` cancel / fullscreen exit), and `stopImmediatePropagation`.
+  Behavior change: an Escape while focus is in page UI now belongs to the
+  page and leaves the panel open (light dismiss still bounds it). The old
+  handler hijacked every Escape on the page, stole focus into the badge,
+  and still let native defaults run (double dismiss).
+- **Light-dismiss blind spots:** main-scrollbar drags (pointerdown on the
+  root element in the scrollbar gutter, RTL-aware) no longer close the
+  popover — that was the one scroll method that killed it. Cross-document
+  iframes swallow pointer/key events entirely, so a `window` blur with
+  `document.activeElement` being an iframe now closes the panel — the one
+  interaction signal that crosses the boundary. Inner-scroller scrollbar
+  drags still light-dismiss (ordinary outside interaction; not worth the
+  per-element offsetX heuristics).
+- **Focus rescue on every close path:** closePopover returns focus to the
+  badge whenever the departing panel contained it (previously only the
+  Escape path did), so reaps/outside-clicks no longer drop keyboard focus
+  to `<body>`. A same-verdict re-render (cached verdict, position churn)
+  no longer rebuilds the panel — preserving disclosure state and focus;
+  rebuild happens only on an actual verdict change.
+- **Collapsed-rect close on the re-render path:** renderBadge now applies
+  the same rule as syncBadges (shared `isCollapsed` predicate, third copy
+  removed) instead of placing the panel against a zeroed rect at the
+  document origin.
+
+### Overlay isolation and a11y (badge.ts, labels.ts)
+
+- **`all: initial` on `.badge` and `.popover`:** the shadow boundary stops
+  selectors but not inheritance — page rules matching the host div leaked
+  `direction`, `letter-spacing`, `text-transform`, etc. into the overlay
+  (RTL sites re-ordered the English popover text). Both roots reset and
+  re-declare everything they need; descendants inherit from the reset
+  roots. `lang="en"` added on the host (WCAG 3.1.2 — overlay strings are
+  English regardless of page language; localization is future work).
+- **Alt text moved from accessible name to `aria-description`** on both
+  badge and popover: page-authored alt can be paragraph-length, and the
+  name is what voice-control users must speak. The badge's name is its
+  visible label; the popover dialog's name is "<verdict> — details" via
+  `POPOVER_STRINGS.dialogLabel`, moving the last user-facing template out
+  of badge.ts (per the strings-live-in-labels decision).
+
+### Structure and hardening
+
+- **placePopover takes a placement object** including a caller-supplied
+  `viewportWidth`: it read `documentElement.clientWidth` mid-write, which
+  forced a synchronous reflow on every popover-open sync frame despite
+  its write-only contract. syncBadges gathers all reads ahead of writes;
+  the open/re-render paths use a shared measure-then-place helper.
+- **Presenter registry is a `Map`,** so a future provider id colliding
+  with an `Object.prototype` key falls back generically instead of
+  invoking an inherited function.
+- **REASONS set removed from the C2PA presenter:** `SUMMARIES` (a
+  compiler-exhaustive `Record` over the reason union) is now the reason
+  whitelist via `Object.hasOwn` — a new reason can no longer be silently
+  rejected by a stale hand-maintained list.
+- **Worker replies are validated** (`isAnalyzeResponse`/`isWireVerdict` in
+  protocol.ts) instead of cast: the verdict is retained per badge and
+  dereferenced at click time, so a malformed reply now takes the handled
+  analysis-failure path rather than throwing in a click handler.
+
+### Deferred (recorded, intentionally not fixed)
+
+- **Badge captures clicks over page UI stacked above the image** (modals,
+  cookie banners under our max z-index): every hit-test heuristic
+  considered (elementsFromPoint at click or sync time) misfires on the
+  far-more-common stretched-link card pattern, where a page overlay
+  legitimately covers the image — hiding or muting the badge exactly
+  where badges matter most. Native top-layer UI (`<dialog>.showModal`,
+  popover API) already paints and hit-tests above the overlay, which
+  bounds the damage to z-index-based overlays that happen to overlap the
+  24px pill. Accepted for the soak; revisit with Phase 3 (a smaller
+  badge, or a yield-on-cover heuristic informed by real sites).
+
+### Live-pass corrections (same session, after the review fixes)
+
+A driven browser pass on the test page (real clicks/keys, not synthetic
+dispatch) verified the review fixes and caught two bugs jsdom could not:
+
+- **`all: initial` does not reset `direction`.** The CSS `all` property
+  excludes `direction` and `unicode-bidi` by spec, so the RTL leak — the
+  most consequential part of the inheritance finding — survived the
+  reset: with `dir="rtl"` on the page, popover text re-ordered while
+  letter-spacing/text-transform/text-align were correctly cut off. Fixed
+  with explicit `direction: ltr` on both shadow roots, pinned by a
+  stylesheet test.
+- **Overlay scrollbars defeat the gutter test.** On macOS (the default),
+  scrollbars occupy zero layout width — `clientWidth === innerWidth` —
+  so "pointerdown outside the root's client box" can never match, and a
+  main-scrollbar drag still closed the popover. The guard now covers
+  both realities: the classic gutter when one exists, otherwise a 17px
+  edge band on axes where the document actually scrolls. A rare genuine
+  root-targeted click inside that band merely leaves the popover open.
+- Verified live with trusted input: event containment (page-level spies
+  saw zero overlay events), Escape consumed from inside vs. delivered to
+  the page from outside, iframe-focus dismiss, alt-as-description +
+  `lang="en"`, the corrected "Unknown" copy coherent with its
+  disclosure, all five fixtures badging (including the remote-manifest
+  fetch path), zero console errors.

@@ -35,8 +35,11 @@
     <p>
       Serves the repo's C2PA fixtures for the task-4 checkpoint. With the
       extension loaded, each image below should get a badge (except where
-      noted); the content script logs full verdict detail to the console under
-      the <code>[TrueOrigin]</code> prefix.
+      noted). Since task 5.3 the badge is a button: clicking it opens the
+      popover with the verdict, a plain-language explanation, and the “How do we
+      know?” disclosure — that is where verdict detail lives now. Analysis
+      <em>failures</em> still log to the console under the
+      <code>[TrueOrigin]</code> prefix.
     </p>
 
     <figure>
@@ -44,8 +47,10 @@
       <figcaption>
         <strong>ai_declared.png</strong> — real OpenAI provenance
         (<code>trainedAlgorithmicMedia</code>). Expected badge:
-        <em>AI — declared</em>; console detail should show validation state
-        <code>Trusted</code> via the conformance trust list.
+        <em>AI — declared</em>; the popover disclosure should show “Signed by
+        OpenAI OpCo, LLC”, “Declares: Created with an AI model”, and “Signature:
+        Valid — signer is on a recognized trust list” (the conformance trust
+        list working in-browser).
       </figcaption>
     </figure>
 
@@ -53,9 +58,10 @@
       <img src="/fixtures/C.jpg" alt="C2PA test-signed fixture" />
       <figcaption>
         <strong>C.jpg</strong> — valid manifest, test-CA signer, no origin
-        declaration. Expected badge: <em>Unknown</em>; console reason
-        <code>no-origin-declaration</code>, validation state
-        <code>Valid</code> (test CA is not on the production trust lists).
+        declaration. Expected badge: <em>Unknown</em>; the popover disclosure
+        should say the credentials “don't state how it was originally created”
+        and “Signature: Valid — signer is not on a recognized trust list” (test
+        CA is not on the production trust lists).
       </figcaption>
     </figure>
 
@@ -63,7 +69,8 @@
       <img src="/fixtures/no_manifest.jpg" alt="No-metadata fixture" />
       <figcaption>
         <strong>no_manifest.jpg</strong> — no C2PA metadata at all. Expected
-        badge: <em>Unknown</em>; console reason <code>no-c2pa-metadata</code>.
+        badge: <em>Unknown</em>; the popover disclosure should say “No Content
+        Credentials are attached to this image.”
       </figcaption>
     </figure>
 
@@ -72,11 +79,12 @@
       <figcaption>
         <strong>cloud.jpg</strong> — carries only a remote manifest URL
         (<code>cai-manifests.adobe.com</code>). Expected badge:
-        <em>Unknown</em> either way; the interesting part is the console — a
+        <em>Unknown</em> either way; the interesting part is the popover — a
         successful fetch validates whatever the manifest says, while an
-        unreachable fetch (offline, blocked) records a provider failure in the
-        verdict's <code>failures</code>, which also keeps the degraded verdict
-        out of both verdict caches so a later analysis retries the fetch.
+        unreachable fetch (offline, blocked) records a provider failure: the
+        popover then shows the “part of this check didn't finish” notice with
+        the failure inside the disclosure, and the degraded verdict stays out of
+        both verdict caches so a later analysis retries the fetch.
       </figcaption>
     </figure>
 
@@ -92,6 +100,31 @@
         request in the page network panel.
       </figcaption>
     </figure>
+
+    <h2>Popover checks (task 5.3)</h2>
+    <ul>
+      <li>
+        Clicking a badge opens its popover; clicking the badge again, pressing
+        <kbd>Esc</kbd> (focus returns to the badge), or clicking anywhere
+        outside closes it. Opening a second badge's popover closes the first.
+      </li>
+      <li>
+        “How do we know?” starts collapsed; expanding it reveals the evidence
+        rows listed per fixture above, and the popover always ends with the
+        local-check privacy note.
+      </li>
+      <li>
+        Keyboard: <kbd>Tab</kbd> reaches each badge, <kbd>Enter</kbd>/<kbd
+          >Space</kbd
+        >
+        opens the popover, and the next <kbd>Tab</kbd> lands on the disclosure
+        button inside it.
+      </li>
+      <li>
+        Scrolling with a popover open keeps it anchored under its badge; the
+        popover never opens page links beneath it.
+      </li>
+    </ul>
 
     <h2>Network-panel audit (plan.md §8, constraint 3)</h2>
     <p>

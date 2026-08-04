@@ -21,13 +21,16 @@ import type {
 } from "../../core/types";
 import { ByteBlob, installFileReaderSyncShim } from "./blob-shim";
 import { mapManifestStore, type C2paDetail } from "./mapping";
+import { C2PA_PROVIDER_ID } from "./present";
 import {
   DEFAULT_TRUST_CONFIG,
   buildSettingsJson,
   type TrustListConfig,
 } from "./settings";
 
-export const C2PA_PROVIDER_ID = "c2pa";
+// The id lives in present.ts (the pure module the content script bundles);
+// re-exported here so provider-side callers keep one import site.
+export { C2PA_PROVIDER_ID };
 
 /** Must match the filename build.mjs copies into dist/. */
 const WASM_FILENAME = "c2pa_bg.wasm";
