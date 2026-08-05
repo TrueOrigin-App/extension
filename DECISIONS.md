@@ -2271,3 +2271,21 @@ win). The timeout-never-falls-back policy is unchanged: a shared-deadline
 expiry surfaces as TimeoutError and still fails the attempt rather than
 escalating. Pinned by asserting both rungs receive the same signal
 instance.
+
+## 2026-08-04 — Live verification of the review-fix wave (owner pass)
+
+Chrome pass over `ad1cf6b`, all green:
+
+- Page network panel matches the corrected audit checklist exactly:
+  script-set strict-CORS render, two CORS-blocked in-page attempts,
+  disk-cache analysis fetches for same-origin figures (double-fetch
+  collapse intact), no request added by the duplicate figure.
+- Worker panel: exactly one cross-host fallback fetch; otherwise only
+  the WASM load and the cached cloud.jpg manifest fetch (cold-worker /
+  warm-trust-cache tier, as the checklist describes). Constraint-3
+  audit artifact: no media bytes or page URLs anywhere else.
+- Cross-host figure badges "AI — declared" via the fallback.
+- PORT override rerun works end to end (the tier the hard-coded port
+  used to silently disable).
+- Closed-shadow popover: click inside does not dismiss; outside click
+  and Escape behave as pinned.
