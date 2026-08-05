@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerdictId } from "../core/types";
 import type { WireVerdict } from "../messaging/protocol";
 import {
+  clearPending,
+  markPending,
   removeAllBadges,
   removeBadgeFor,
   renderBadge,
@@ -150,7 +152,7 @@ describe("popover", () => {
     const popover = popoverElements()[0];
     expect(popover?.getAttribute("role")).toBe("dialog");
     expect(popover?.querySelector(".headline")?.textContent).toBe(
-      "AI — declared",
+      "Made with AI",
     );
     expect(badge.getAttribute("aria-expanded")).toBe("true");
     // Inserted right after the badge, so tab order flows into the panel.
@@ -197,7 +199,7 @@ describe("popover", () => {
 
     badge.click();
     const popover = popoverElements()[0];
-    expect(popover?.getAttribute("aria-label")).toBe("AI — declared — details");
+    expect(popover?.getAttribute("aria-label")).toBe("Made with AI — details");
     expect(popover?.getAttribute("aria-description")).toBe("Sunset over hills");
   });
 
@@ -583,5 +585,138 @@ describe("removal", () => {
 
     removeAllBadges();
     expect(host()).toBeNull();
+  });
+});
+
+// Owner decision 2026-08-05 (DECISIONS.md, Phase 3 ask round): Unknown
+// badges render on intent only; strong verdicts assert unprompted.
+describe("intent-gated presence", () => {
+  it("hides Unknown badges until the reader hovers the image, then re-hides", () => {
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(badge.dataset["presence"]).toBe("hidden");
+
+    image.dispatchEvent(new Event("pointerenter"));
+    expect(badge.dataset["presence"]).toBe("shown");
+
+    image.dispatchEvent(new Event("pointerleave"));
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
+  });
+
+  it("never gates strong verdicts", () => {
+    const image = makeImage("https://example.com/b.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBeUndefined();
+  });
+
+  it("reveals on pointer movement within the image — scrolling can bring an image under a stationary cursor without any boundary event", () => {
+    const image = makeImage("https://example.com/scrolled.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    image.dispatchEvent(new Event("pointermove"));
+    expect(badge.dataset["presence"]).toBe("shown");
+  });
+
+  it("reveals when keyboard focus reaches the badge", () => {
+    const image = makeImage("https://example.com/c.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    badge.dispatchEvent(new Event("focusin"));
+    expect(badge.dataset["presence"]).toBe("shown");
+  });
+
+  it("holds the reveal while the badge's popover is open", () => {
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/d.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    image.dispatchEvent(new Event("pointerenter"));
+    badge.click();
+    image.dispatchEvent(new Event("pointerleave"));
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("shown");
+    vi.useRealTimers();
+  });
+
+  it("re-gates when a re-analysis lands back on Unknown", () => {
+    const image = makeImage("https://example.com/e.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    renderBadge(image, wire("ai-declared"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(badge.dataset["presence"]).toBeUndefined();
+    renderBadge(image, wire("unknown"), image.src);
+    expect(badge.dataset["presence"]).toBe("hidden");
+  });
+});
+
+// Finish-review fix 2: the intent-gated in-flight indicator — a tracing
+// ring revealed while analysis runs, handed off to the verdict badge.
+describe("pending indicator", () => {
+  it("shows a checking chip on intent while analysis runs, and hands off", () => {
+    const image = makeImage("https://example.com/slow.jpg");
+    markPending(image);
+    // No host yet: the chip (and the whole overlay) exists only on intent.
+    expect(overlayRoot?.querySelector(".badge.pending") ?? null).toBeNull();
+
+    image.dispatchEvent(new Event("pointermove"));
+    const chip = overlayRoot?.querySelector(".badge.pending");
+    expect(chip?.getAttribute("role")).toBe("status");
+    expect(chip?.querySelector(".ring")?.getAttribute("data-ring")).toBe(
+      "checking",
+    );
+
+    renderBadge(image, wire("unknown"), image.src);
+    expect(overlayRoot?.querySelector(".badge.pending")).toBeNull();
+    // Continuity: the verdict landed under the reader's pointer, so the
+    // gated Unknown badge takes over already revealed.
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+  });
+
+  it("clears silently when analysis fails without a verdict", () => {
+    const image = makeImage("https://example.com/broken.jpg");
+    markPending(image);
+    image.dispatchEvent(new Event("pointerenter"));
+    expect(overlayRoot?.querySelector(".badge.pending")).not.toBeNull();
+    clearPending(image);
+    expect(overlayRoot?.querySelector(".badge.pending")).toBeNull();
+  });
+});
+
+// The Evidence Ring's honest bands (ring.ts): closed for cryptographic
+// verdicts, visibly open for probabilistic, barely started for unknown —
+// never a continuous confidence mapping.
+describe("evidence ring", () => {
+  function arcBand(badge: HTMLButtonElement): string | null | undefined {
+    return badge.querySelector(".ring-arc")?.getAttribute("stroke-dasharray");
+  }
+
+  it("draws the honest band and class glyph for each verdict", () => {
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-likely"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(arcBand(badge)).toBe("85 100");
+    expect(badge.querySelector(".ring")?.getAttribute("data-ring")).toBe(
+      "ai-likely",
+    );
+
+    renderBadge(image, wire("human-verified"), image.src);
+    expect(arcBand(badge)).toBe("100 100");
+
+    renderBadge(image, wire("unknown"), image.src);
+    expect(arcBand(badge)).toBe("15 100");
+  });
+
+  it("keeps the ring SVG out of the accessible name", () => {
+    const image = makeImage("https://example.com/b.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(badge.querySelector(".ring")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(badge.textContent).toBe("Made with AI");
   });
 });

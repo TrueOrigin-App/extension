@@ -1,21 +1,25 @@
 import type { VerdictId } from "../core/types";
 
-/** Placeholder badge wording: the plan.md §2 engineering labels, verbatim,
- * owner-approved for the task-4 checkpoint. Final user-facing wording is
- * Phase 3 brand work (Impeccable) — do not refine these here. The
- * Record type keeps the mapping exhaustive over the locked taxonomy. */
+/** Finalized badge wording (Phase 3 brand pass, owner-approved
+ * 2026-08-05 — DECISIONS.md). Presentation of the plan.md §2 taxonomy,
+ * never its rules: "Likely AI" leads with the hedge (probabilistic by
+ * §2), "Verified photo" names exactly the signed-capture evidence class,
+ * and "Unknown" stays the brand's own word — the restraint is the
+ * product. Do not change casually; wording edits are an §8 owner ask.
+ * The Record type keeps the mapping exhaustive over the locked
+ * taxonomy. */
 export const VERDICT_LABELS: Record<VerdictId, string> = {
-  "ai-declared": "AI — declared",
-  "ai-likely": "AI — likely",
-  "human-verified": "Human — verified",
+  "ai-declared": "Made with AI",
+  "ai-likely": "Likely AI",
+  "human-verified": "Verified photo",
   unknown: "Unknown",
 };
 
-/** Placeholder popover explanations (task 5.3), one plain-language sentence
- * per verdict, written in the PRODUCT.md voice: calm, honest, no jargon at
- * the surface. Owner-approved as placeholders; Phase 3 finalizes. The §2
- * rules bind the content: "unknown" must never read as "not AI", and
- * "ai-likely" must read as probabilistic. */
+/** Finalized popover explanations (Phase 3 brand pass, owner-approved
+ * 2026-08-05), one plain-language sentence per verdict in the PRODUCT.md
+ * voice: calm, honest, no jargon at the surface. The §2 rules bind the
+ * content: "unknown" must never read as "not AI", and "ai-likely" must
+ * read as probabilistic. */
 export const VERDICT_EXPLANATIONS: Record<VerdictId, string> = {
   // Covers both whole-image AI and composites (an AI declaration on any
   // ingredient of the validated chain) without overstating either — and
@@ -24,22 +28,33 @@ export const VERDICT_EXPLANATIONS: Record<VerdictId, string> = {
   "ai-declared":
     "This image carries a signed statement that it was made with AI or " +
     "contains AI-generated material.",
+  // "Signs point to" covers both evidence classes honestly (2026-08-04
+  // decision, Phase 3 wording note): future probabilistic detector
+  // signals AND an expired, un-timestamped AI declaration — a signed
+  // statement whose timing can't be proven is a strong sign, not proof.
+  // The class-specific story lives in the disclosure summary.
   "ai-likely":
-    "Detection signals suggest this image may be AI-made. This is an " +
-    "estimate, not a certainty.",
+    "Signs point to this image being AI-made, but the evidence falls " +
+    "short of proof. This is an estimate, not a certainty.",
   "human-verified":
     "A signed record from a real camera shows this image was captured " +
     "with it, with no edits recorded since.",
   // "usable" carries the §2 definition (Unknown = no *usable* signals):
   // three of the four C2PA reasons mapping here found credentials that
   // simply weren't usable as evidence, so "was found" alone would
-  // contradict the disclosure right beneath it.
+  // contradict the disclosure right beneath it. "Origin information"
+  // rather than "provenance" — no jargon at the surface.
   unknown:
-    "No usable provenance information was found for this image. Most " +
-    "images carry none, so this says nothing either way.",
+    "We couldn't find any usable origin information for this image. " +
+    "Most images carry none — so this says nothing either way.",
 };
 
-/** Remaining popover strings, same placeholder status as above. */
+/** Accessible name of the intent-revealed in-flight indicator (a status,
+ * not a control). Finalized with the Phase 3 pass. */
+export const CHECKING_LABEL = "Checking this image…";
+
+/** Remaining popover strings — kept verbatim by the Phase 3 pass
+ * (owner-approved 2026-08-05). */
 export const POPOVER_STRINGS = {
   /** The progressive-disclosure toggle (plan.md §4). */
   disclosureLabel: "How do we know?",

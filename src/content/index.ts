@@ -26,7 +26,13 @@ import {
   forgetAcquisitionFailure,
   type UrlCacheEntry,
 } from "./acquire";
-import { removeBadgeFor, renderBadge, syncBadges } from "./badge";
+import {
+  clearPending,
+  markPending,
+  removeBadgeFor,
+  renderBadge,
+  syncBadges,
+} from "./badge";
 import { ScanScheduler } from "./scheduler";
 
 const LOG_PREFIX = "[TrueOrigin]";
@@ -182,6 +188,10 @@ const scheduler = new ScanScheduler<HTMLImageElement>({
   maxConcurrent: MAX_CONCURRENT_ANALYSES,
   analyze: async (image) => {
     const generation = generationOf(image);
+    // Intent-gated "checking" indicator for the whole analysis window
+    // (settle wait + acquisition + WASM). renderBadge hands it off to the
+    // verdict badge; the finally covers every failure path.
+    markPending(image);
     try {
       await analyzeImage(image);
     } catch (thrown) {
@@ -199,6 +209,8 @@ const scheduler = new ScanScheduler<HTMLImageElement>({
       const attempts = (failedAttempts.get(image) ?? 0) + 1;
       failedAttempts.set(image, attempts);
       if (attempts < MAX_ANALYSIS_ATTEMPTS) scheduler.reset(image);
+    } finally {
+      clearPending(image);
     }
   },
 });

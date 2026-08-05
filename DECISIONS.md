@@ -2429,3 +2429,97 @@ opens Phase 3.
   carried palette chips and prose, no sketches (per skill, that page
   is complete, not degraded).
 
+## 2026-08-05 — Phase 3 badge/popover rebuild shipped (finish review: "ship")
+
+### The build (task #2 of the Phase 3 docket)
+
+- Badge and popover rebuilt in the committed Evidence Ring world:
+  dark-glass 28px chip (ring + authored glyph) that grows into a labeled
+  pill on hover/focus; popover as a glass card with a headline ring,
+  per-signal miniature rings, internally scrolling evidence, and the
+  privacy line always visible. New `src/content/ring.ts` owns all ring
+  geometry: honest bands (closed 100 / open 85 / trace 15) plus a
+  non-evidence `checking` arc; hues key on `data-ring` in one place.
+- Owner behavior decisions implemented: Unknown badges intent-gated
+  (pointerenter/pointermove/focus reveal, graceful re-hide, popover and
+  focus hold the reveal); an intent-gated in-flight "checking" indicator
+  spans the whole analysis window (markPending/clearPending, wired in
+  index.ts, reveal-continuity handoff to a gated Unknown verdict).
+- The direction contract ships as the shadow root's first node
+  (DIRECTION_CONTRACT, seed af6230f8 — grep-able in dist/content.js).
+
+### Bounded verification rounds (Impeccable §7)
+
+- Live inspection found one material gap, fixed and confirmed: scrolling
+  can put an image under a stationary cursor with no boundary event, so
+  pointermove joined pointerenter as a reveal trigger (pinned by test).
+- Finish review ran as a fresh general-purpose subagent following the
+  skill's degraded reviewer charter (this harness ships no
+  impeccable-finish-reviewer agent type — substitution disclosed). Round
+  1: four material fixes (privacy line buried under an invisible scroll
+  edge; missing checking state; popover never flipping above the fold;
+  no pressed state). All four applied; the reviewer's round-2 verdict
+  caught one batch regression (the pending spin ignored
+  prefers-reduced-motion — fixed) and demanded in-extension evidence for
+  two partials. Both captured (the checking state via a
+  dribbled-bytes localhost server holding a real analysis open).
+  Closing disposition, verbatim: **ship** — "remaining: clear".
+- Chrome-only note: `scrollbar-width: thin` disables `::-webkit-scrollbar`
+  styling, and macOS overlay scrollbars hide the native thin thumb — the
+  always-visible evidence-scroll cue therefore uses the webkit pseudos.
+
+### DESIGN.md recorded (documenter pass)
+
+- DESIGN.md + `.impeccable/design.json` written from the built world by
+  the documenter charter (same disclosed substitution). All labels.ts
+  strings recorded as placeholder pending the owner wording pass.
+- DESIGN.md added to `.prettierignore` — same fence as PRODUCT.md
+  (Impeccable-owned file; the formatter stays off it).
+
+### Docket effects
+
+- Google-dropdown stacking (5.5 soak finding): the 28px chip replaces the
+  ~90px text pill, materially shrinking the collision surface; the
+  cover-heuristic / page-DOM-sibling question stays on the docket, not
+  resolved by this task.
+
+## 2026-08-05 — Phase 3 wording pass: verdict copy finalized (owner-selected)
+
+### Badge labels (presentation of §2; the rules and enum values untouched)
+
+- `ai-declared` → **"Made with AI"** (industry-familiar, matches the
+  signed statement's own claim; composites clarified in the popover).
+- `ai-likely` → **"Likely AI"** (leads with the hedge — unmisreadable as
+  certainty, satisfying §2's probabilistic-labeling rule at a glance).
+- `human-verified` → **"Verified photo"** (names exactly the
+  signed-capture evidence class; avoids "Human", which invites
+  over-reading beyond capture provenance).
+- `unknown` → **"Unknown"**, unchanged — the restraint is the brand.
+- Owner selected each from a structured options round. Rejected: keeping
+  the engineering labels at the surface ("declared" is insider
+  vocabulary; the em-dash constructions read as taxonomy, not language);
+  "AI (signed)"; "Probably AI" (weaker than the 0.9-confidence class
+  deserves); "Camera-verified" (more technical than the audience needs).
+
+### Explanations and remaining strings
+
+- ai-likely explanation rewritten to cover both evidence classes
+  honestly (the 2026-08-04 decision's Phase 3 note): "Signs point to
+  this image being AI-made, but the evidence falls short of proof. This
+  is an estimate, not a certainty." — true of a probabilistic detector
+  signal and of an expired, un-timestamped declaration alike.
+- unknown explanation drops the "provenance" jargon: "We couldn't find
+  any usable origin information for this image. Most images carry none —
+  so this says nothing either way."
+- Kept verbatim by owner decision: the ai-declared and human-verified
+  explanations, "How do we know?", the degraded notice, the failure
+  line, and the privacy line. CHECKING_LABEL finalized as shipped.
+- Presenter summaries (providers layer) unchanged — already
+  plain-language and consistent with the new labels.
+- labels.ts comments now mark the wording finalized (edits remain an §8
+  owner ask); three pinned test literals updated; 225/225 pass.
+
+Phase 3 as scoped by the owner (in-page UI + wording; store assets
+deferred to a later effort) is complete: visual world committed and
+recorded (DESIGN.md), badge/popover shipped through the finish review
+("ship"), wording finalized.

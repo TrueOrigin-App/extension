@@ -15,6 +15,7 @@ import {
   VERDICT_EXPLANATIONS,
   VERDICT_LABELS,
 } from "./labels";
+import { buildRing, ringStateForFinding, ringStateForVerdict } from "./ring";
 
 let nextEvidenceId = 0;
 
@@ -29,7 +30,12 @@ function signalSection(signal: WireVerdict["signals"][number]): HTMLDivElement {
   const { summary, facts } = presentSignal(signal);
   const section = document.createElement("div");
   section.className = "signal";
-  section.append(paragraph("summary", summary));
+  // Each signal is its own ring — the aggregation architecture drawn as
+  // geometry; a future provider arrives as one more ring, no new grammar.
+  section.append(
+    buildRing(ringStateForFinding(signal.finding), "ring"),
+    paragraph("summary", summary),
+  );
 
   if (facts.length > 0) {
     const list = document.createElement("dl");
@@ -53,8 +59,16 @@ function signalSection(signal: WireVerdict["signals"][number]): HTMLDivElement {
 export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   const fragment = document.createDocumentFragment();
 
-  fragment.append(
+  // Headline row: the verdict's ring at reading size beside its name; the
+  // arc re-sweeps to its honest band each time the panel opens.
+  const header = document.createElement("div");
+  header.className = "verdict";
+  header.append(
+    buildRing(ringStateForVerdict(verdict.verdict), "ring"),
     paragraph("headline", VERDICT_LABELS[verdict.verdict]),
+  );
+  fragment.append(
+    header,
     paragraph("explain", VERDICT_EXPLANATIONS[verdict.verdict]),
   );
 
