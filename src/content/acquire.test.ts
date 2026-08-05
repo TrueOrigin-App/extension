@@ -13,7 +13,11 @@ import {
   type AnalyzeUrlResponse,
   type WireVerdict,
 } from "../messaging/protocol";
-import { acquireAndAnalyze } from "./acquire";
+import {
+  acquireAndAnalyze,
+  forgetAcquisitionFailure,
+  resetAcquisitionMemory,
+} from "./acquire";
 
 const URL_UNDER_TEST = "https://cdn.example/pic.png";
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
@@ -77,6 +81,7 @@ function corsTypeError(): TypeError {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetAcquisitionMemory();
 });
 
 describe("in-page path", () => {
@@ -134,6 +139,19 @@ describe("in-page path", () => {
       "force-cache",
       "no-cache",
     ]);
+    // Rung 1 must stay uncredentialed (include would fail the common
+    // ACAO:* cache read); rung 2 always hits the network, where the
+    // render sent cookies, so it mirrors them (owner decision,
+    // 2026-08-04).
+    expect(mock.mock.calls.map(([, init]) => init?.credentials)).toEqual([
+      undefined,
+      "include",
+    ]);
+    // Both rungs share one deadline: per-rung timeouts stacked into a
+    // ~90 s worst-case hold on an analysis slot (review finding).
+    const signals = mock.mock.calls.map(([, init]) => init?.signal);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[1]).toBe(signals[0]);
     expect(sendMessage.mock.calls[0]![0]).toMatchObject({
       type: ANALYZE_MESSAGE_TYPE,
     });
@@ -177,6 +195,82 @@ describe("worker-side fallback", () => {
       type: ANALYZE_URL_MESSAGE_TYPE,
     });
     expect(entry.pinned).toBe(true);
+  });
+
+  it("does not fall back on HTTP errors the worker cannot cure", async () => {
+    // Only Origin-conditioned refusals (401/403) escalate; a second,
+    // credentialed request cannot change a 404 or 5xx, and re-hitting a
+    // 429 would amplify the limit it just signalled.
+    for (const status of [404, 429, 500]) {
+      // Each iteration reuses the URL; the failure memory (tested in its
+      // own block) would otherwise fail-fast every status after the first.
+      resetAcquisitionMemory();
+      const mock = stubFetch(async () => imageResponse({ status }));
+      const sendMessage = stubWorker({});
+
+      await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(
+        new RegExp(`HTTP ${status}`),
+      );
+      expect(mock).toHaveBeenCalledTimes(1);
+      expect(sendMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it("falls back when the in-page response is not an image", async () => {
+    // A session-gated host may serve the cookieless in-page analysis
+    // fetch a challenge page it would not serve the worker's
+    // cookie-bearing request — and analyzing HTML into an "Unknown"
+    // badge is the failure mode the shared guard exists to stop.
+    stubFetch(async () =>
+      imageResponse({
+        headers: { "content-type": "text/html;charset=utf-8" },
+      }),
+    );
+    const sendMessage = stubWorker({
+      byUrl: { ok: true, verdict: wireVerdict(), pinned: true },
+    });
+
+    const entry = await acquireAndAnalyze(URL_UNDER_TEST);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]![0]).toEqual({
+      type: ANALYZE_URL_MESSAGE_TYPE,
+      url: URL_UNDER_TEST,
+    });
+    expect(entry.pinned).toBe(true);
+  });
+
+  it("falls back when the message channel refuses the inline payload", async () => {
+    stubFetch(async () => imageResponse());
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === ANALYZE_MESSAGE_TYPE) {
+        throw new Error("Message length exceeded maximum allowed length");
+      }
+      return { ok: true, verdict: wireVerdict(), pinned: true };
+    });
+    vi.stubGlobal("chrome", { runtime: { sendMessage } });
+
+    const entry = await acquireAndAnalyze(URL_UNDER_TEST);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[1]![0]).toEqual({
+      type: ANALYZE_URL_MESSAGE_TYPE,
+      url: URL_UNDER_TEST,
+    });
+    expect(entry.pinned).toBe(true);
+  });
+
+  it("surfaces a channel refusal for URLs the worker cannot fetch", async () => {
+    stubFetch(async () => imageResponse());
+    const sendMessage = vi.fn(async () => {
+      throw new Error("Message length exceeded maximum allowed length");
+    });
+    vi.stubGlobal("chrome", { runtime: { sendMessage } });
+
+    await expect(
+      acquireAndAnalyze("data:image/png;base64,AA=="),
+    ).rejects.toThrow(/analysis message failed/);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("routes oversized bytes through the worker fetch instead of the message channel", async () => {
@@ -239,6 +333,118 @@ describe("worker-side fallback", () => {
     stubWorker({ byUrl: { ok: false, error: "HTTP 404" } });
 
     await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(/HTTP 404/);
+  });
+});
+
+describe("per-page-view acquisition memory", () => {
+  it("goes worker-first for a URL proven CORS-blocked", async () => {
+    const mock = stubFetch(async () => {
+      throw corsTypeError();
+    });
+    const sendMessage = stubWorker({
+      byUrl: { ok: true, verdict: wireVerdict(), pinned: false },
+    });
+
+    await acquireAndAnalyze(URL_UNDER_TEST);
+    expect(mock).toHaveBeenCalledTimes(2);
+
+    // Second attempt: no in-page fetches at all, straight to the worker.
+    await acquireAndAnalyze(URL_UNDER_TEST);
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("extends the skip to origin siblings after enough distinct proofs", async () => {
+    const mock = stubFetch(async () => {
+      throw corsTypeError();
+    });
+    stubWorker({
+      byUrl: { ok: true, verdict: wireVerdict(), pinned: false },
+    });
+
+    await acquireAndAnalyze("https://cdn.example/a.png");
+    await acquireAndAnalyze("https://cdn.example/b.png");
+    const fetchesSoFar = mock.mock.calls.length;
+
+    // Third URL, same origin, never seen: skips the in-page rungs.
+    await acquireAndAnalyze("https://cdn.example/c.png");
+    expect(mock).toHaveBeenCalledTimes(fetchesSoFar);
+
+    // Different origin: unaffected by the hint.
+    await acquireAndAnalyze("https://other.example/d.png");
+    expect(mock.mock.calls.length).toBeGreaterThan(fetchesSoFar);
+  });
+
+  it("does not record a CORS proof when the worker leg also failed", async () => {
+    // Both paths failing looks like offline as much as strict CORS —
+    // nothing is proven, so the next attempt runs the full ladder.
+    const mock = stubFetch(async () => {
+      throw corsTypeError();
+    });
+    stubWorker({ byUrl: { ok: false, error: "network down" } });
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow();
+    forgetAcquisitionFailure(URL_UNDER_TEST);
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow();
+    // Four in-page fetches: the full two-rung ladder ran both times.
+    expect(mock).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails fast on a URL that failed acquisition moments ago", async () => {
+    const mock = stubFetch(async () => imageResponse({ status: 404 }));
+    stubWorker({});
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(/HTTP 404/);
+    expect(mock).toHaveBeenCalledTimes(1);
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(
+      /moments ago.*HTTP 404/,
+    );
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers a worker-leg refusal and fails fast on the retry", async () => {
+    stubFetch(async () => {
+      throw corsTypeError();
+    });
+    const sendMessage = stubWorker({
+      byUrl: { ok: false, error: "image host answered with a redirect" },
+    });
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(/redirect/);
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(
+      /moments ago/,
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not remember timeouts", async () => {
+    // A stall is origin slowness; the retry budget exists to heal it.
+    const mock = stubFetch(async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    });
+    stubWorker({});
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(
+      /timed out/,
+    );
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(
+      /timed out/,
+    );
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets a remembered failure on identity invalidation", async () => {
+    const mock = stubFetch(async () => imageResponse({ status: 404 }));
+    stubWorker({});
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(/HTTP 404/);
+    forgetAcquisitionFailure(URL_UNDER_TEST);
+
+    await expect(acquireAndAnalyze(URL_UNDER_TEST)).rejects.toThrow(/HTTP 404/);
+    expect(mock).toHaveBeenCalledTimes(2);
   });
 });
 

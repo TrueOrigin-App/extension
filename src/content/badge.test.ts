@@ -5,7 +5,7 @@
 // stale-URL dropping, host-rebuild re-adoption, and the popover's
 // open/dismiss rules — not real geometry. The observer wiring in index.ts
 // is real-browser soak territory (plan.md §6).
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerdictId } from "../core/types";
 import type { WireVerdict } from "../messaging/protocol";
 import {
@@ -45,16 +45,32 @@ function host(): HTMLElement | null {
   return document.getElementById("trueorigin-badge-host");
 }
 
+// The overlay's shadow root is closed (host.shadowRoot is null by design —
+// the leak-resistance test below pins that), so tests capture the root at
+// creation by wrapping attachShadow.
+let overlayRoot: ShadowRoot | null = null;
+const attachShadow = Element.prototype.attachShadow;
+
+beforeEach(() => {
+  overlayRoot = null;
+  vi.spyOn(Element.prototype, "attachShadow").mockImplementation(function (
+    this: Element,
+    init: ShadowRootInit,
+  ): ShadowRoot {
+    overlayRoot = attachShadow.call(this, init);
+    return overlayRoot;
+  });
+});
+
 function badgeElements(): HTMLButtonElement[] {
   return Array.from(
-    host()?.shadowRoot?.querySelectorAll<HTMLButtonElement>("button.badge") ??
-      [],
+    overlayRoot?.querySelectorAll<HTMLButtonElement>("button.badge") ?? [],
   );
 }
 
 function popoverElements(): HTMLDivElement[] {
   return Array.from(
-    host()?.shadowRoot?.querySelectorAll<HTMLDivElement>(".popover") ?? [],
+    overlayRoot?.querySelectorAll<HTMLDivElement>(".popover") ?? [],
   );
 }
 
@@ -110,6 +126,18 @@ describe("renderBadge", () => {
     expect(badge?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(badge?.getAttribute("aria-expanded")).toBe("false");
   });
+
+  it("keeps the overlay unreadable by page script (closed shadow root)", () => {
+    // The analysis may have acquired bytes the page itself cannot read
+    // (the worker's credentialed CORS-exempt fallback); an open root
+    // would hand the verdict and provenance details to page script via
+    // host.shadowRoot.
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+
+    expect(overlayRoot?.mode).toBe("closed");
+    expect(host()?.shadowRoot).toBeNull();
+  });
 });
 
 describe("popover", () => {
@@ -141,7 +169,7 @@ describe("popover", () => {
     // stylesheet text can pin this here).
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("unknown"), image.src);
-    const style = host()?.shadowRoot?.querySelector("style")?.textContent;
+    const style = overlayRoot?.querySelector("style")?.textContent;
     expect(style).toContain(".evidence[hidden]");
   });
 
@@ -152,7 +180,7 @@ describe("popover", () => {
     // cascade shadow stylesheets, so pin the stylesheet text.
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("unknown"), image.src);
-    const style = host()?.shadowRoot?.querySelector("style")?.textContent;
+    const style = overlayRoot?.querySelector("style")?.textContent;
     expect(style).toContain("direction: ltr");
   });
 

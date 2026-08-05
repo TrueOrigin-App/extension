@@ -9,11 +9,14 @@
 //      all (strict-CORS hosts) or cannot ship them (message-size cap),
 //      the worker fetches under its host permissions and analyzes there.
 //
-// The in-page path stays primary: it shares the page's cache partition
-// and request context (cookies, Referer), so its bytes are the render's
-// bytes. The worker path is the fallback precisely because it fetches
-// from a different partition — a divergence risk accepted only when the
-// in-page path has already failed (rationale in DECISIONS.md, task 5.5).
+// The in-page path stays primary: it shares the page's cache partition,
+// so when the render's cache entry is readable its bytes are exactly the
+// render's bytes. (On a cache miss the match is close but not perfect —
+// fetch() sends no cookies cross-origin, where the render did; an open
+// question recorded in DECISIONS.md.) The worker path is the fallback
+// precisely because it fetches from a different partition — a divergence
+// risk accepted only when the in-page path has already failed (rationale
+// in DECISIONS.md, task 5.5).
 //
 // Element-independent by design: every function here takes a URL and
 // returns a claim about that URL, valid — and cacheable — regardless of
@@ -33,8 +36,8 @@ import {
 import {
   ANALYSIS_FETCH_TIMEOUT_MS,
   IMAGE_ACCEPT,
+  imageMimeTypeFor,
   isPinnableResponse,
-  mimeTypeFor,
 } from "../lib/image-accept";
 
 /** One analysis outcome, plus whether the URL cache may keep it: a
@@ -56,23 +59,146 @@ const MAX_INLINE_TRANSPORT_BYTES = 32 * 1024 * 1024;
 
 /** An in-page byte-acquisition failure the worker fetch may be able to
  * cure: the CORS layer refusing the read (TypeError) or the server
- * refusing the request (HTTP error — e.g. hosts that 403 Origin-carrying
- * requests they would happily serve without one). Deliberately excludes
- * timeouts (DOMException "TimeoutError"): a 30 s stall is origin
- * slowness, and the worker would pay the same 30 s for the same likely
- * outcome — the retry budget already re-attempts transient stalls. */
+ * refusing the request with an Origin-conditioned status (401/403 — e.g.
+ * hosts that 403 Origin-carrying requests they would happily serve
+ * without one). Deliberately excludes timeouts (DOMException
+ * "TimeoutError"): a 30 s stall is origin slowness, and the worker would
+ * pay the same 30 s for the same likely outcome — the retry budget
+ * already re-attempts transient stalls. Other HTTP errors (404, 429,
+ * 5xx) are excluded too: the worker's request cannot change those
+ * statuses, and re-hitting a host that just answered 429 with a second,
+ * credentialed request would amplify the very limit it signalled. */
 class AcquisitionError extends Error {}
 
 function isAcquisitionFailure(thrown: unknown): boolean {
   return thrown instanceof AcquisitionError || thrown instanceof TypeError;
 }
 
+/** The message channel itself refusing the payload (size cap, channel
+ * loss) — distinct from an analysis failure so the caller can retry via
+ * the worker fetch, which does not use the channel for bytes at all. */
+class TransportError extends Error {}
+
+// ---------------------------------------------------------------------------
+// Per-page-view acquisition memory (owner-accepted review follow-up,
+// DECISIONS.md 2026-08-04). Two independent memories, both module state —
+// alive exactly as long as the page view, like the URL verdict cache:
+//
+// 1. CORS-blocked memory: a URL is *proven* in-page-unreachable when both
+//    in-page rungs hit the CORS layer AND the worker fetch then succeeded
+//    (which rules out offline/DNS). Such URLs — and, after
+//    ORIGIN_HINT_THRESHOLD distinct proofs, their whole origin — skip the
+//    in-page rungs and go worker-first, eliminating the guaranteed-blocked
+//    round trips the strict-CORS path otherwise re-pays. The origin hint
+//    can over-generalize on mixed-CORS origins; the cost is only losing
+//    the double-fetch collapse there, never a wrong verdict.
+//
+// 2. Failure memory: acquisition failures both paths rejected (a 404, a
+//    refused redirect, an over-ceiling body) are deterministic on the
+//    scale of a page view, so re-attempts within a short TTL fail fast
+//    instead of re-paying the ladder. Deliberately excludes timeouts (the
+//    retry budget exists to heal those) and analysis-side failures (a
+//    worker restart can heal those). index.ts clears a URL's entry on
+//    identity invalidation — content that rotated deserves a fresh try.
+
+const ORIGIN_HINT_THRESHOLD = 2;
+const FAILURE_MEMORY_TTL_MS = 30_000;
+const FAILURE_MEMORY_MAX_ENTRIES = 500;
+
+const corsBlockedUrls = new Set<string>();
+const corsBlockedOriginCounts = new Map<string, number>();
+const recentFailures = new Map<string, { at: number; message: string }>();
+
+function originOf(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldSkipInPagePath(url: string): boolean {
+  if (corsBlockedUrls.has(url)) return true;
+  const origin = originOf(url);
+  return (
+    origin !== undefined &&
+    (corsBlockedOriginCounts.get(origin) ?? 0) >= ORIGIN_HINT_THRESHOLD
+  );
+}
+
+function recordCorsBlocked(url: string): void {
+  if (corsBlockedUrls.has(url)) return;
+  corsBlockedUrls.add(url);
+  const origin = originOf(url);
+  if (origin !== undefined) {
+    corsBlockedOriginCounts.set(
+      origin,
+      (corsBlockedOriginCounts.get(origin) ?? 0) + 1,
+    );
+  }
+}
+
+function recordAcquisitionFailure(url: string, message: string): void {
+  if (recentFailures.size >= FAILURE_MEMORY_MAX_ENTRIES) {
+    // Drop expired entries first; if none were, drop the oldest (Map
+    // iteration is insertion-ordered) so the memory stays bounded.
+    const now = Date.now();
+    for (const [key, entry] of recentFailures) {
+      if (now - entry.at >= FAILURE_MEMORY_TTL_MS) recentFailures.delete(key);
+    }
+    if (recentFailures.size >= FAILURE_MEMORY_MAX_ENTRIES) {
+      const oldest = recentFailures.keys().next();
+      if (!oldest.done) recentFailures.delete(oldest.value);
+    }
+  }
+  recentFailures.set(url, { at: Date.now(), message });
+}
+
+function assertNoRecentFailure(url: string): void {
+  const entry = recentFailures.get(url);
+  if (!entry) return;
+  if (Date.now() - entry.at >= FAILURE_MEMORY_TTL_MS) {
+    recentFailures.delete(url);
+    return;
+  }
+  throw new Error(
+    `analysis failed for this URL moments ago (${entry.message}); not re-attempting yet`,
+  );
+}
+
+/** Identity invalidation hook (index.ts): the URL's content is rotating,
+ * so a remembered failure may no longer apply. CORS-blocked memory is
+ * deliberately kept — CORS behavior is origin/server configuration, not
+ * content. */
+export function forgetAcquisitionFailure(url: string): void {
+  recentFailures.delete(url);
+}
+
+/** Test seam: clears every per-page-view memory. */
+export function resetAcquisitionMemory(): void {
+  corsBlockedUrls.clear();
+  corsBlockedOriginCounts.clear();
+  recentFailures.clear();
+}
+
 async function fetchImage(url: string): Promise<Response> {
-  const request = (cache: RequestCache): Promise<Response> =>
+  // One deadline for the whole in-page ladder, not one per rung: stacked
+  // per-rung budgets would let a host that stalls ~29 s then resets
+  // (TypeError, so rung 2 still runs) hold one of the two analysis slots
+  // for ~60 s in page context alone, ~90 s with the worker's own bound.
+  // Shared, the worst case is ≤30 s here plus the worker fetch's own
+  // ≤30 s when the fallback runs — the same total as before task 5.5
+  // added a rung.
+  const signal = AbortSignal.timeout(ANALYSIS_FETCH_TIMEOUT_MS);
+  const request = (
+    cache: RequestCache,
+    credentials?: RequestCredentials,
+  ): Promise<Response> =>
     fetch(url, {
       headers: { accept: IMAGE_ACCEPT },
       cache,
-      signal: AbortSignal.timeout(ANALYSIS_FETCH_TIMEOUT_MS),
+      ...(credentials ? { credentials } : {}),
+      signal,
     });
   try {
     // force-cache reuses the HTTP-cache entry the render stored regardless
@@ -80,7 +206,14 @@ async function fetchImage(url: string): Promise<Response> {
     // the task-4 checkpoint, and keeping the verdict about the bytes on
     // screen rather than a newer representation a revalidation could
     // return. Content-script fetches share the page's cache partition, and
-    // the pinned Accept header keeps Vary: Accept matching.
+    // the pinned Accept header keeps Vary: Accept matching. Default
+    // (same-origin) credentials, NOT include: a credentialed CORS read
+    // requires an exact-origin ACAO + Allow-Credentials, so include would
+    // fail exactly the common ACAO:* cache entries this rung exists to
+    // read. The cache-hit path needs no cookies anyway — the entry was
+    // stored by the render's own cookie-bearing request. The residual
+    // divergence (a cache-*miss* here goes to the network cookieless) is
+    // accepted and recorded (DECISIONS.md, 2026-08-04 review items).
     return await request("force-cache");
   } catch (thrown) {
     if (!(thrown instanceof TypeError)) throw thrown;
@@ -91,10 +224,15 @@ async function fetchImage(url: string): Promise<Response> {
     // serves it to this cors-mode fetch as a deterministic TypeError.
     // Revalidate past it — at the cost of possibly analyzing newer bytes
     // than the render (pre-5.2 behavior; the pinned bytes are unreadable
-    // here by definition). Other TypeErrors (offline, DNS, strict CORS)
-    // just fail the same way twice, quickly, and reach the worker
-    // fallback below.
-    return request("no-cache");
+    // here by definition). Credentialed, unlike rung 1: this rung always
+    // goes to the network, where the render sent cookies — and it only
+    // runs after force-cache failed, so the ACAO:* cache-hit path above
+    // is never affected. If a server refuses the credentialed read, the
+    // failure lands in the worker fallback, whose cookie-bearing fetch
+    // cures it anyway. Other TypeErrors (offline, DNS, strict CORS) just
+    // fail the same way twice, quickly, and reach the worker fallback
+    // below.
+    return request("no-cache", "include");
   }
 }
 
@@ -125,7 +263,14 @@ async function analyzeInline(
     mimeType,
     sourceUrl: url,
   };
-  const result: unknown = await chrome.runtime.sendMessage(request);
+  let result: unknown;
+  try {
+    result = await chrome.runtime.sendMessage(request);
+  } catch (thrown) {
+    throw new TransportError(
+      `analysis message failed: ${thrown instanceof Error ? thrown.message : String(thrown)}`,
+    );
+  }
   // Not a cast: the verdict below is cached and dereferenced again at
   // badge-click time, so a malformed reply must take this handled failure
   // path, not surface later as a TypeError inside a click handler.
@@ -146,6 +291,13 @@ async function analyzeViaWorkerFetch(url: string): Promise<UrlCacheEntry> {
     throw new Error("analysis failed: malformed worker reply");
   }
   if (!result.ok) {
+    // An ok:false reply is the worker's fetch/decode layer refusing the
+    // URL (HTTP error, refused redirect, size ceiling, MIME guard) —
+    // deterministic on the scale of a page view, so remember it. Analysis
+    // failures proper arrive as ok:true verdicts with failure entries and
+    // are never remembered (assertCompleted below rejects them fresh each
+    // time, keeping them healable by retry).
+    recordAcquisitionFailure(url, result.error);
     throw new Error(`analysis failed: ${result.error}`);
   }
   assertCompleted(result.verdict);
@@ -160,17 +312,40 @@ export async function acquireAndAnalyze(url: string): Promise<UrlCacheEntry> {
   // CORS, and blob: handles are scoped to this page's context.
   const workerCanFetch = url.startsWith("http:") || url.startsWith("https:");
 
+  if (workerCanFetch) {
+    assertNoRecentFailure(url);
+    if (shouldSkipInPagePath(url)) {
+      // Proven in-page-unreachable (this URL, or enough of its origin):
+      // the in-page rungs would only add guaranteed-blocked round trips.
+      return analyzeViaWorkerFetch(url);
+    }
+  }
+
   let response: Response;
   let blob: Blob;
   try {
     response = await fetchImage(url);
     if (!response.ok) {
-      throw new AcquisitionError(`image fetch failed: HTTP ${response.status}`);
+      const failure = `image fetch failed: HTTP ${response.status}`;
+      // Only Origin-conditioned refusals escalate to the worker (see
+      // AcquisitionError's comment for why nothing else does). The rest
+      // are deterministic for the page view — remember them so retries
+      // and duplicate images fail fast instead of re-fetching.
+      if (response.status === 401 || response.status === 403) {
+        throw new AcquisitionError(failure);
+      }
+      recordAcquisitionFailure(url, failure);
+      throw new Error(failure);
     }
     blob = await response.blob();
   } catch (thrown) {
     if (workerCanFetch && isAcquisitionFailure(thrown)) {
-      return analyzeViaWorkerFetch(url);
+      const entry = await analyzeViaWorkerFetch(url);
+      // Worker success after an in-page CORS-layer failure proves the
+      // in-page path is what's blocked (not the network) — remember, so
+      // later attempts and origin siblings go worker-first.
+      if (thrown instanceof TypeError) recordCorsBlocked(url);
+      return entry;
     }
     throw thrown;
   }
@@ -183,17 +358,35 @@ export async function acquireAndAnalyze(url: string): Promise<UrlCacheEntry> {
     return analyzeViaWorkerFetch(url);
   }
 
-  const mimeType = mimeTypeFor(blob, response.url);
-  if (!mimeType) {
-    // Not an acquisition failure: the worker's fetch would see the same
-    // headers and the same extension-less URL.
-    throw new Error("could not determine image MIME type");
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let mimeType: string;
+  try {
+    mimeType = imageMimeTypeFor(bytes, blob.type);
+  } catch (thrown) {
+    // A non-image response here is not proof the worker would see the
+    // same thing: this in-page analysis fetch carries no cookies
+    // cross-origin, so a session-gated host may have served a challenge
+    // page it would not serve the worker's cookie-bearing request. Worth
+    // one escalation; the worker applies the same guard to what it gets.
+    if (workerCanFetch) return analyzeViaWorkerFetch(url);
+    throw thrown;
   }
 
-  return analyzeInline(
-    new Uint8Array(await blob.arrayBuffer()),
-    mimeType,
-    url,
-    isPinnableResponse(response),
-  );
+  try {
+    return await analyzeInline(
+      bytes,
+      mimeType,
+      url,
+      isPinnableResponse(response),
+    );
+  } catch (thrown) {
+    // The channel refusing the payload is not an analysis failure — the
+    // worker fetch never ships bytes over the channel, so it can still
+    // succeed. Genuine analysis errors propagate: re-running the same
+    // pipeline on the same bytes would only repeat them.
+    if (workerCanFetch && thrown instanceof TransportError) {
+      return analyzeViaWorkerFetch(url);
+    }
+    throw thrown;
+  }
 }

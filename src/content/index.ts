@@ -21,7 +21,11 @@
 
 import { isCacheableVerdict } from "../core/types";
 import { CoalescingLruCache } from "../lib/coalescing-lru";
-import { acquireAndAnalyze, type UrlCacheEntry } from "./acquire";
+import {
+  acquireAndAnalyze,
+  forgetAcquisitionFailure,
+  type UrlCacheEntry,
+} from "./acquire";
 import { removeBadgeFor, renderBadge, syncBadges } from "./badge";
 import { ScanScheduler } from "./scheduler";
 
@@ -38,8 +42,10 @@ const VIEWPORT_LOOKAHEAD = "200px";
 // provisional; tune against soak feel.
 const MIN_IMAGE_DIMENSION_PX = 96;
 // A hung image load must never hold an analysis slot forever — two of
-// them would silently stop all scanning for the page view. (The fetch
-// itself is bounded inside acquire.ts.)
+// them would silently stop all scanning for the page view. (Byte
+// acquisition is bounded inside acquire.ts: one shared 30 s deadline for
+// the in-page ladder, plus the worker fetch's own 30 s when the fallback
+// runs.)
 const SETTLE_TIMEOUT_MS = 10_000;
 // Bound on the page-view verdict cache. Provisional: entries are one
 // WireVerdict each (manifest-store detail dominates), so this only guards
@@ -247,7 +253,13 @@ function invalidateScan(image: HTMLImageElement): void {
   // layer still absorbs the WASM cost when the bytes are unchanged.
   // Duplicate-element absorption (the dominant cache win) is unaffected.
   const url = image.currentSrc || image.src;
-  if (url) verdictsByUrl.delete(url);
+  if (url) {
+    verdictsByUrl.delete(url);
+    // Same reasoning as the verdict eviction: rotating content may fetch
+    // fine now, so the remembered acquisition failure must not outlive
+    // the identity it described.
+    forgetAcquisitionFailure(url);
+  }
   removeBadgeFor(image);
   scheduler.reset(image);
   // The fresh cycle re-gates and re-registers for growth if still small.

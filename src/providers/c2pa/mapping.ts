@@ -9,6 +9,7 @@ import type {
   Action,
   Manifest,
   ManifestStore,
+  ValidationResults,
   ValidationState,
 } from "@contentauth/c2pa-web";
 import type { Finding } from "../../core/types";
@@ -242,7 +243,28 @@ function captureSourceTypeOf(
 
 function failureCodesOf(store: ManifestStore): string[] {
   const codes = new Set<string>();
-  const results = store.validation_results;
+  addResultCodes(store.validation_results, codes);
+  // Legacy stores surface problems via validation_status instead.
+  addStatusCodes(store.validation_status, codes);
+  // The store-level results cover the active manifest plus *deltas* since
+  // ingredient time — a failure already recorded when an ingredient was
+  // consumed (e.g. its hashes never verified) appears only on the
+  // ingredient entry itself, and must count: the expired-cert exception
+  // below gates on there being no failure anywhere in the store beyond
+  // the tolerated cert-status codes.
+  for (const manifest of Object.values(store.manifests ?? {})) {
+    for (const ingredient of manifest.ingredients ?? []) {
+      addResultCodes(ingredient.validation_results, codes);
+      addStatusCodes(ingredient.validation_status, codes);
+    }
+  }
+  return [...codes];
+}
+
+function addResultCodes(
+  results: ValidationResults | null | undefined,
+  codes: Set<string>,
+): void {
   for (const status of results?.activeManifest?.failure ?? []) {
     codes.add(status.code);
   }
@@ -251,9 +273,13 @@ function failureCodesOf(store: ManifestStore): string[] {
       codes.add(status.code);
     }
   }
-  // Legacy stores surface problems via validation_status instead.
-  for (const status of store.validation_status ?? []) {
+}
+
+function addStatusCodes(
+  statuses: { code: string; success?: boolean | null }[] | null | undefined,
+  codes: Set<string>,
+): void {
+  for (const status of statuses ?? []) {
     if (status.success === false) codes.add(status.code);
   }
-  return [...codes];
 }

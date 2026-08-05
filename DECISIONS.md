@@ -2099,3 +2099,175 @@ Open items, consolidated for whoever picks this up:
 - Housekeeping: `ai_image.png` in the repo root is the owner's scratch
   copy of the vendored `fixtures/ai_expired.png` — untracked,
   deletable.
+
+## 2026-08-04 — Code-review fixes on task 5.5 (PR #6)
+
+An adversarial review of the branch confirmed one taxonomy violation and
+a cluster of acquisition-path defects. Fixes 1–8 below are applied;
+review items 9 (credential asymmetry of the in-page rungs) and 11 (the
+strict-CORS triple-fetch cost) are deliberately **not** decided here —
+they need an owner call and are listed at the end.
+
+- **Expired-AI exception now gates on failures recorded anywhere in the
+  store, including ingredient entries.** `failureCodesOf` previously read
+  only store-level `validation_results` (active manifest + ingredient
+  _deltas_) and legacy `validation_status`; a content failure recorded at
+  ingredient time (e.g. `assertion.dataHash.mismatch` on the AI
+  ingredient itself) lives on `manifests[*].ingredients[*]` and was
+  invisible — so an AI declaration whose hashes never verified could be
+  promoted to "AI — likely" (§2 violation, review-confirmed by
+  execution). Now ingredient `validation_results`/`validation_status`
+  failures count, which also makes the invalid-manifest popover detail
+  more complete. Alternative rejected: restricting the exception to the
+  active manifest — the owner decision it implements is explicitly about
+  declarations anywhere in the store.
+- **The worker fallback fetch refuses redirects** (`redirect: "manual"`;
+  an `opaqueredirect` or raw 3xx fails the acquisition). The fetch is
+  CORS-exempt and credentialed under broad host permissions, so
+  following redirects let the image host steer a cookie-bearing request
+  at intranet/localhost targets — and falsified the module's
+  constraint-3 claim that the only request goes to the image's own host.
+  Cost: images behind redirecting URLs lose the fallback verdict
+  (fail-closed). Alternatives rejected: post-hoc `response.url` origin
+  check (the request has already been made — that is the harm);
+  validate-and-follow via Location (unreadable through the
+  opaqueredirect filter).
+- **The badge overlay's shadow root is closed.** With the credentialed
+  fallback, an open root converted images the page can render but not
+  read into page-readable provenance (verdict text, signer, title via
+  `host.shadowRoot`). Closed mode required one behavioral companion: the
+  popover's light-dismiss check now tests for the _host_ in
+  `composedPath()` (the path no longer exposes shadow-internal nodes to
+  document-level listeners; the host is an exact stand-in because it is
+  0×0 and pointer-events: none). Tests capture the root by wrapping
+  `attachShadow`; a new test pins `host.shadowRoot === null`.
+- **One shared not-the-rendered-image guard on both acquisition paths**
+  (`imageMimeTypeFor` in image-accept.ts), replacing the worker-only
+  `text/*` check and the URL-extension MIME fallback. Declared image/*
+  types are trusted; any other declared type fails the analysis (the
+  in-page path previously analyzed an HTML login page into an "Unknown"
+  badge — review-confirmed); no declaration (or octet-stream) resolves
+  by magic-byte sniffing (JPEG/PNG/GIF/WebP/TIFF/AVIF; SVG by
+  document-start inspection), never by URL extension — which typed an
+  extensionless HTML challenge named photo.jpg as image/jpeg
+  (review-confirmed bypass). Side effects: octet-stream-served real
+  images now analyze (sniffed), and the `new URL("")` crash on
+  service-worker-synthesized responses dissolves (the URL is no longer
+  consulted). An in-page guard failure escalates to the worker once: the
+  in-page analysis fetch is cookieless cross-origin, so a session-gated
+  host may have served it a challenge it would not serve the worker's
+  cookie-bearing request.
+- **64 MiB ceiling on the worker fetch body, enforced while streaming.**
+  The worker path is the deliberate destination for >32 MiB images, so
+  the ceiling sits above the transport cap with margin, but unbounded
+  bodies could OOM the MV3 worker (killing every pending analysis).
+  Content-Length is checked first for the honest case; the streamed
+  count is the enforcement (header can be absent, wrong, or compressed
+  — the reader yields decoded bytes), and never more than the ceiling
+  is held. 128 MiB rejected (two copies + hash approach worker memory
+  limits); "no cap, rely on timeout" rejected (bounds time, not size).
+- **A `sendMessage` rejection on the inline path now falls back to the
+  worker fetch** (`TransportError`): the channel refusing the payload is
+  not an analysis failure, and the worker fetch does not ship bytes over
+  the channel at all. data:/blob: payloads still surface the error (the
+  worker cannot fetch those; pre-existing policy).
+- **Only 401/403 escalate an in-page HTTP error to the worker.** The
+  escalation exists for Origin-conditioned refusals; 404/5xx cannot be
+  cured by the worker's request, and re-hitting a 429 with a second,
+  credentialed fetch would amplify the limit it just signalled.
+- The acquire.ts header no longer claims the in-page path shares the
+  render's full request context — on a cross-origin cache miss the
+  analysis fetch carries no cookies where the render did.
+
+**Open (owner call needed, from the same review):** (a) whether in-page
+analysis fetches should send `credentials: "include"` to actually mirror
+the render, or the divergence stays accepted-and-documented; (b) the
+strict-CORS path still costs ~3 origin requests / 2 downloads per image
+(the no-cache rung is a guaranteed-blocked round trip there, but is not
+simply removable — its TypeError is indistinguishable from the
+recoverable task-5.2 case); (c) test-page port hard-coding, checklist
+fetch-count corrections, and an onMessage wiring test (review items
+12–14) remain unapplied.
+
+## 2026-08-04 — Owner decisions on the review's open items
+
+- **Strict-CORS fetch waste (review item b): designs #1+#2 accepted** —
+  per-page-view negative memory (URL-level certain, origin-level hint;
+  in-page path skipped once proven CORS-blocked) plus a short-TTL
+  negative cache for acquisition failures (cleared with the scheduler's
+  reset so transient failures cannot go sticky). **#3 (webRequest header
+  observation) rejected on permission posture:** it would not violate
+  constraint 3 (all local), but it grants observational power over all
+  page traffic to read one header — the opposite of the minimum-viable
+  posture the trust story sells. Queued as a follow-up task, not part
+  of the review-fix diff.
+- **Credential asymmetry (review item a): resolved** — rung 2 (the
+  no-cache revalidation) now sends `credentials: "include"`; rung 1
+  (force-cache) stays uncredentialed, and the residual divergence is
+  accepted. Why this split: a credentialed CORS read requires an
+  exact-origin ACAO plus Allow-Credentials, so include on rung 1 would
+  break the common `ACAO: *` cache reads that are the double-fetch
+  collapse — and the cache-hit path needs no cookies anyway (the entry
+  was stored by the render's own cookie-bearing request). Rung 2 always
+  hits the network, where the render did send cookies, and it only runs
+  after rung 1 failed, so nothing that works today is affected; if a
+  server refuses the credentialed read, the worker fallback's
+  cookie-bearing fetch cures it. **Accepted residual:** a rung-1 cache
+  _miss_ (no-store render, evicted entry) goes to the network
+  cookieless, so a session-gated host serving `ACAO: *` can hand the
+  analysis a different representation undetected. Closing it needs
+  credentialed-first-with-retry, which taxes every uncached `ACAO: *`
+  image (the common case) with a doubled round trip — rejected. Full
+  alternatives analysis in the session log.
+
+## 2026-08-04 — Review follow-ups implemented (same session)
+
+The accepted designs above plus review items 12–14, applied:
+
+- **Acquisition memory (acquire.ts, per page view).** CORS-blocked
+  memory records a URL only when both in-page rungs TypeErrored _and_
+  the worker fetch then succeeded — worker success is what rules out
+  offline/DNS, so nothing transient can be "proven". Origin hint
+  threshold: **2 distinct proven URLs** (1 felt too eager for
+  mixed-CORS origins; the only cost of over-generalizing is losing the
+  double-fetch collapse for that origin, never a wrong verdict).
+  Failure memory: 30 s TTL, 500-entry cap, records non-escalated HTTP
+  errors and worker-leg (`ok:false`) refusals; deliberately excludes
+  timeouts (retry budget heals those) and analysis-side failures
+  (worker restarts heal those — an incomplete verdict arrives `ok:true`
+  and is rejected fresh each time). index.ts clears a URL's failure
+  entry on identity invalidation; CORS memory survives invalidation
+  (CORS is server config, not content). data:/blob: URLs bypass both
+  memories (URL-as-payload retention, same reason as the verdict
+  cache). Test seam: `resetAcquisitionMemory()`.
+- **Test page (items 12–13).** The strict-CORS figure's src is now set
+  by inline script — same port as the page (serve.mjs honors PORT; the
+  hard-coded 8917 silently disabled the tier on any other port),
+  opposite host (localhost ↔ 127.0.0.1) so the tier survives opening
+  the page by either name. Audit checklist corrected to the counts the
+  tests pin: two CORS-blocked in-page attempts per first analysis, and
+  a retry after a failed attempt is legitimate (attempt budget is 2),
+  not a bug.
+- **onMessage wiring test (item 14).** src/background/index.test.ts
+  pins: both arms return `true` synchronously (the channel-hold
+  contract), both eventually sendResponse a guard-passing reply (the
+  inline arm against the real pipeline with the provider failure
+  isolated), and unknown messages get neither. Closes the review's
+  "wiring regression ships green" gap.
+
+## 2026-08-04 — Review finding 10 (stacked timeouts), caught by owner audit
+
+Initially dropped from the fix rounds (it sat in a "fix or consciously
+accept" bucket that never got decided); the owner's completeness check
+caught it. Fix: the in-page ladder's two rungs now share **one**
+`AbortSignal.timeout(30_000)` instead of minting one each, restoring the
+pre-5.5 worst case — ≤30 s in page context plus the worker fetch's own
+≤30 s when the fallback runs (~60 s total, down from ~90 s) — so a
+stall-then-reset host can no longer hold one of the two analysis slots
+for three full budgets. The worker's own deadline stays separate by
+design (it is a different context; threading a remaining-time budget
+through the message channel was rejected as complexity without a real
+win). The timeout-never-falls-back policy is unchanged: a shared-deadline
+expiry surfaces as TimeoutError and still fails the attempt rather than
+escalating. Pinned by asserting both rungs receive the same signal
+instance.
