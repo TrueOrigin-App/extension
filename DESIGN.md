@@ -271,9 +271,10 @@ to the 24 viewBox. New glyphs join that stroke system or they don't ship.
 ## Components
 
 All user-facing strings quoted below ("How do we know?", the verdict labels
-and explanations, the privacy line) are the current placeholder copy in
-`src/content/labels.ts` — an owner-approved wording pass is pending. The
-structure is canonical; the words are not final brand voice.
+and explanations, the privacy line) are the finalized brand copy in
+`src/content/labels.ts` (owner-approved 2026-08-05: **Made with AI /
+Likely AI / Verified photo / Unknown**). Wording edits are an §8 owner
+ask — never changed casually.
 
 ### Evidence Ring (signature)
 
