@@ -1995,9 +1995,17 @@ Map the narrow class to **`ai-indicated`, confidence 0.9**
   for this path the specifics live in the disclosure summary. Fine as
   placeholder; the Phase 3 pass should make the verdict line cover both
   sources honestly.
-- **Watch item:** `ai_declared.png` (newer OpenAI pipeline) carries
-  timestamps but showed `timeStamp.untrusted` alongside
-  `timeStamp.validated` in its results — if its TSA is not on the trust
-  lists, that fixture inherits this same cliff when its signing cert
-  expires (CI would fail loudly on the Trusted assertions; the mapping
-  added here is what keeps the _product_ behavior sane when it does).
+- **Watch item (pinned down 2026-08-04, owner follow-up):**
+  `ai_declared.png` (newer OpenAI pipeline) IS on the C2PA conformance
+  trust list — production config validates it **Trusted** — and it does
+  carry a timestamp, but that timestamp is signed by OpenAI's own TSA
+  ("OpenAI TSA Leaf"): `timeStamp.validated` (digest matches) yet
+  `timeStamp.untrusted` (the TSA is not on the C2PA TSA trust list). An
+  untrusted timestamp cannot establish signing time, so the expiry
+  forgiveness that keeps e.g. DigiCert-timestamped manifests verifiable
+  after cert expiry will not apply. When this cert expires: if the
+  conformance TSA list has added OpenAI's TSA by then (it is fetched
+  live, so the fixture heals automatically), nothing changes; otherwise
+  the fixture flips to Invalid + expired, the mapping above keeps the
+  product verdict sane ("AI — likely"), and the CI assertions pinning
+  Trusted/ai-declared will need updating.
