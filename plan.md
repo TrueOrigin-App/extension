@@ -125,6 +125,8 @@ The **Google Lens right-click** feature (context menu → constructed Lens URL) 
 
 ## 6. Roadmap
 
+> **Update (2026-08-05):** Phases 1–2 are complete, and Phase 3's in-page work — the visual world, badge/popover rebuild, and finalized verdict wording — has shipped (DECISIONS.md carries the record). The rest of Phase 3 (the remaining polish docket, store listing, screenshots, privacy write-up) is queued in **ROADMAP.md**, which supersedes this section and §8's task order as the source of what to work on next. One framing correction: the first non-C2PA provider will be the free, local generator-metadata provider (owner-approved, scheduled ahead of Phase 4) — the paid-signal framing under Phase 4 applies to the provider after it. Phase 4 itself remains unplanned.
+
 ### Phase 1 — Vertical slice
 Goal: validate the *architecture*, not just the SDK.
 - Signal provider interface + aggregator + verdict mapper, with C2PA as the sole provider.
@@ -197,6 +199,8 @@ This plan is standing context, not a one-shot spec. Work in scoped tasks; keep d
 - Anything that touches how verdicts are worded to users (brand territory, Phase 3).
 
 ### Task order for the initial build
+
+> **Update (2026-08-05):** this task order is exhausted — ROADMAP.md is the live queue. Everything above in §8 (hard constraints, free choices, ask-first list) remains fully in force.
 1. Scaffold repo: MV3 manifest (minimal permissions), TypeScript, chosen bundler, test runner. Create DECISIONS.md, LICENSE (Apache 2.0), and NOTICE.
 2. Implement `SignalProvider` interface, aggregator, verdict mapper, with a **mock provider** and unit tests — including the test that a second mock provider plugs in with zero outside changes (§6 Phase 1 exit criterion).
 3. Implement the real C2PA provider (`@contentauth/c2pa-web`, WASM in service worker). **WASM loading: bundle the `.wasm` binary inside the extension package and load it via `chrome.runtime.getURL()`** — do not use the README's CDN-fetch default (runtime network dependency) or the `/inline` base64 variant (bundle bloat, no compileStreaming) unless the bundled approach proves unworkable in the MV3 worker, in which case fall back to `/inline` and record why in DECISIONS.md.

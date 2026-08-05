@@ -9,6 +9,12 @@ Read plan.md before any work. §8 defines your hard constraints, what you may
 decide freely, what requires asking first, and the task order. The verdict
 taxonomy (§2) and its rules are non-negotiable.
 
+Then read ROADMAP.md — the current task queue (one chunk = one session = one
+PR), with per-chunk context pointers and status. plan.md §8's original task
+order is exhausted; ROADMAP.md supersedes it as the source of what to work on
+next. Take the topmost queued chunk unless directed otherwise, and update its
+status line as part of the chunk's PR.
+
 ## Working conventions
 
 - Record every free-choice decision in DECISIONS.md (what, why, alternatives rejected).
