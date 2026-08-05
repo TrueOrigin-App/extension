@@ -65,12 +65,18 @@ export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   const fragment = document.createDocumentFragment();
 
   // Headline row: the verdict's ring at reading size beside its name; the
-  // arc re-sweeps to its honest band each time the panel opens.
+  // arc re-sweeps to its honest band each time the panel opens. The name
+  // is a real heading — the one stop screen-reader heading navigation
+  // finds inside the dialog (the dialog's aria-label carries the fuller
+  // "<verdict> — details"; this is structure, not the accessible name).
+  const headline = document.createElement("h2");
+  headline.className = "headline";
+  headline.textContent = VERDICT_LABELS[verdict.verdict];
   const header = document.createElement("div");
   header.className = "verdict";
   header.append(
     buildRing(ringStateForVerdict(verdict.verdict), "ring"),
-    paragraph("headline", VERDICT_LABELS[verdict.verdict]),
+    headline,
   );
   fragment.append(
     header,

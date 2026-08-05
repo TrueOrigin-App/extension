@@ -437,6 +437,25 @@ describe("popover", () => {
     expect(wheel.defaultPrevented).toBe(true);
   });
 
+  it("lets Ctrl+wheel (browser zoom, pinch) through the panel", () => {
+    // Chrome dispatches trackpad pinch as wheel with ctrlKey set, and
+    // Ctrl+scroll is zoom on every platform. Consuming those would
+    // silently block zoom whenever the pointer rests on an open panel.
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    const zoom = new WheelEvent("wheel", {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      deltaY: 120,
+      ctrlKey: true,
+    });
+    popoverElements()[0]!.querySelector(".explain")!.dispatchEvent(zoom);
+    expect(zoom.defaultPrevented).toBe(false);
+  });
+
   it("closes when its image's badge is removed", () => {
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("ai-declared"), image.src);

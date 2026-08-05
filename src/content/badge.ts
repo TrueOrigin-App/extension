@@ -310,7 +310,9 @@ const BADGE_STYLE = `
   /* macOS overlay scrollbars are invisible until scrolled — the cue the
      truncation finding demands must always be visible. Chrome-only
      surface, so the webkit pseudos are the mechanism; setting the
-     standard scrollbar-width property would disable them. */
+     standard scrollbar-width property would disable them. Thumb alpha
+     0.38 clears the 3:1 non-text floor (WCAG 1.4.11) against the
+     panel's worst-case (white-page) backdrop — 0.3 measured 2.58:1. */
   .popover::-webkit-scrollbar,
   .popover > .evidence::-webkit-scrollbar {
     width: 8px;
@@ -319,7 +321,7 @@ const BADGE_STYLE = `
   .popover > .evidence::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 999px;
-    background: rgba(245, 246, 247, 0.3);
+    background: rgba(245, 246, 247, 0.38);
     background-clip: content-box;
   }
   .popover::-webkit-scrollbar-track,
@@ -775,6 +777,11 @@ function openPopoverFor(image: HTMLImageElement): void {
   element.addEventListener(
     "wheel",
     (event) => {
+      // Ctrl+wheel is browser zoom, not scrolling — Chrome also
+      // synthesizes it (ctrlKey set) for trackpad pinch. Containment
+      // must never eat the reader's zoom (WCAG 1.4.4/1.4.10 territory):
+      // let the default action through untouched.
+      if (event.ctrlKey) return;
       event.preventDefault();
       for (const node of event.composedPath()) {
         if (!(node instanceof HTMLElement)) continue;
