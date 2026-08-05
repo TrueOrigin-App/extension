@@ -2048,3 +2048,54 @@ owner as a docket item — not yet scheduled.
   detected-but-below-threshold marker should still surface in the
   popover's evidence list (the pipeline already supports it —
   below-threshold signals stay visible in `Verdict.signals`).
+
+## 2026-08-04 — State at task 5.5 close / handoff notes
+
+Task 5.5 and its soak follow-ups are complete on PR #6
+(`task-5.5-cors-fallbacks`, CI green, description current — including the
+one owner-decided verdict-semantics change). 185 tests green; live pass
+in Chrome verified the CORS fallback end to end. With 5.1–5.5 done, the
+§8 task order is exhausted: **Phase 2 is code-complete**, pending the §6
+cadence gate (multi-day daily-driver soak) before it is declared done.
+
+Open items, consolidated for whoever picks this up:
+
+- **Merge PR #6** when review satisfies; branch protection note from the
+  5.2 entry still applies (owner flips the setting).
+- **Soak continues.** Constants raised/tuned this session
+  (96 px min-size gate, dwell/concurrency/lookahead, 32 MiB transport
+  ceiling, verdict-cache caps) are all provisional against soak feel.
+  Watch specifically: fallback-fetch frequency per CDN, text/* rejection
+  sightings, popover feel after the scroll-hijack fix.
+- **"Human — verified" fixture still missing** (plan.md task-order
+  note): needs a capture-signed photo from a trust-listed device
+  (recent Pixel with Content Credentials, Leica M11-P, Sony/Nikon/Canon
+  C2PA firmware, or a published Content Credentials sample). The
+  verdict is unreachable end-to-end until then — by design.
+- **Deliberate CI tripwire:** `ai_declared.png`'s OpenAI signing cert
+  will eventually expire; its timestamp is from OpenAI's own TSA (not
+  on the C2PA TSA list), so Trusted/ai-declared assertions will fail
+  that day unless the conformance TSA list adds it first. Owner chose
+  to leave it. The product behavior at that point is the new
+  expired-declaration mapping ("AI — likely"); only test expectations
+  need updating. Option recorded if it becomes annoying: freeze the
+  clock the WASM sees (it reads JS `Date.now()`).
+- **Phase 3 docket** (from this session): badge occlusion by page
+  overlays (three candidates recorded — smaller badge, cover
+  heuristic, in-DOM sibling injection); "AI — likely" verdict-line
+  wording now covers two sources (classifier-style signals and the
+  expired-declaration path) and should be reworded accordingly;
+  contextual "look this image up" popover link (from 5.4).
+- **Future task (owner-approved):** unsigned generator-metadata
+  provider (previous entry). Note plan.md §6 frames the first
+  non-C2PA provider as Phase 4 paid-tier territory — this one is local
+  and free, so the owner may want to amend the plan's framing when
+  scheduling it (plan.md is owner-authored; not edited from here).
+- **Known-open from 5.1 (unchanged):** shadow-DOM image discovery
+  (Lit sites like Reddit), `all_frames` iframes, CSS-animation badge
+  re-anchoring gap.
+- **Next per plan.md:** the second `/impeccable init` pass (the
+  post-soak re-interview, the authoritative one) opens Phase 3.
+- Housekeeping: `ai_image.png` in the repo root is the owner's scratch
+  copy of the vendored `fixtures/ai_expired.png` — untracked,
+  deletable.
