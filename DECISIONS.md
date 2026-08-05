@@ -2639,3 +2639,36 @@ rebuild re-adopting badge, open popover, and disclosure state, shadow
 root still closed. Wheel containment could not be exercised by
 automation (compositor-gesture caveat above) — covered by the jsdom
 preventDefault pin plus the owner's manual trackpad check (passed).
+
+## 2026-08-05 — `/impeccable audit` of badge.ts (18/20) and its fix wave
+
+Audit scored the overlay 18/20 (a11y 3, perf 4, responsive 4, theming 3,
+implementation integrity 4; bundled detector: zero findings). All verdict
+hues measured 6.0–8.8:1 non-text and all text 7.2:1+ against worst-case
+(white-page) backdrops. Fixes applied in the audit's recommended order:
+
+- Evidence scrollbar thumb alpha 0.3 → 0.38 (`badge.ts`): worst-case
+  contrast measured 2.58:1, under the WCAG 1.4.11 3:1 non-text floor —
+  and the always-visible thumb is load-bearing as the truncation cue.
+  0.38 measures 3.29:1 (0.36 is the bare 3.10:1 minimum; 0.38 buys
+  margin). Value recorded in DESIGN.md alongside the rationale.
+- Popover headline is a real `<h2>` now (was `<p>` via the paragraph
+  helper): the one heading-navigation stop screen readers get inside the
+  dialog. Class-based styling and the dialog's aria-label are unchanged.
+- Wheel containment lets Ctrl+wheel through (`badge.ts`): Chrome
+  synthesizes ctrlKey wheel events for trackpad pinch, and Ctrl+scroll
+  is browser zoom on every platform — consuming them silently blocked
+  zoom whenever the pointer rested on an open panel. Scroll containment
+  is untouched. New jsdom pin: ctrlKey wheel is not defaultPrevented.
+  Like wheel containment, the pinch path is compositor-level and
+  unreachable by automation — verified by the owner's manual pinch
+  check over an open panel (2026-08-05): zoom works.
+- DESIGN.md reconciled with two shipped decisions it had drifted from:
+  the resting-chip material (frontmatter chip-glass 0.82 → 0.92 with
+  hover/focus/open-only blur — decided and recorded here 2026-08-05 but
+  never carried into DESIGN.md's token or Elevation prose) and the new
+  thumb value. `.impeccable/design.json` regenerated to match (badge
+  component snippets, chip-glass canonical, ui-rounded Chrome caveat in
+  keyCharacteristics), clearing the sidecar-stale warning.
+
+237/237 tests pass (1 added), typecheck and Prettier clean.

@@ -2,7 +2,7 @@
 name: TrueOrigin
 description: Dark-glass Evidence Ring overlay — confidence drawn as geometry over anyone's page.
 colors:
-  chip-glass: "rgba(15, 16, 20, 0.82)"
+  chip-glass: "rgba(15, 16, 20, 0.92)"
   chip-glass-hover: "rgba(30, 32, 40, 0.88)"
   chip-glass-active: "rgba(10, 10, 14, 0.9)"
   panel-glass: "rgba(17, 18, 23, 0.92)"
@@ -134,7 +134,10 @@ class; every hue is redundant with a band and a glyph.
 ### Neutral
 
 - **Chip Glass** (`{colors.chip-glass}`): the badge chip's dark translucent
-  ground, paired with backdrop blur. Hover lightens to
+  ground. At rest it grounds itself on alpha alone — no resting backdrop
+  blur (2026-08-05 perf decision: a live blur readback per chip per
+  scrolled frame drops frames on image-heavy pages); the glass moment
+  arrives up close, on hover/focus/open. Hover lightens to
   `{colors.chip-glass-hover}`; press settles to
   `{colors.chip-glass-active}`.
 - **Panel Glass** (`{colors.panel-glass}`): the popover's slightly denser
@@ -234,9 +237,12 @@ RTL direction) must never leak into the overlay, and `all` does not reset
 
 Depth is material, not drama: a two-layer glass system rendered with
 translucency, backdrop blur, a hairline inner edge, and one soft ambient
-shadow each. The chip is glass over the page (`blur(10px) saturate(140%)`,
-shadow `0 1px 4px rgba(0, 0, 0, 0.35)`); the popover is denser glass one
-step up (`blur(16px) saturate(140%)`, shadow
+shadow each. The chip rests on translucency alone (shadow
+`0 1px 4px rgba(0, 0, 0, 0.35)`) and turns to true glass up close —
+`blur(10px) saturate(140%)` on hover/focus/open only (2026-08-05 perf
+decision: resting blur on every chip drops frames on image-heavy pages);
+the popover is denser glass one step up, always live
+(`blur(16px) saturate(140%)`, shadow
 `0 8px 28px rgba(0, 0, 0, 0.4)`). Both carry a 0.5px white inset hairline
 (0.22 alpha on the chip, 0.18 on the panel) that catches the surface edge
 the way a complication bezel does.
@@ -354,7 +360,8 @@ scale from 0.98). Fixed content order, top to bottom:
 4. **Disclosure toggle** — "How do we know?".
 5. **Evidence region** (collapsed by default): the only part that scrolls,
    with an always-visible 8px scrollbar (content-box thumb at
-   `rgba(245, 246, 247, 0.3)`) so truncation is never invisible; separated
+   `rgba(245, 246, 247, 0.38)` — clears 3:1 against the panel's
+   worst-case backdrop) so truncation is never invisible; separated
    by a Track Frost hairline; per-signal rows and failure lines inside.
 6. **Privacy line** (Footnote, Unknown Gray): the trust claim stays visible
    at every panel height — it never scrolls away.
