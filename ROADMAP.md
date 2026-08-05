@@ -83,10 +83,13 @@ is corpus entry #1).
 - Keyboard-accessible scrolling of an overflowing evidence list: the
   overlay has no focusable scroll region today; fix must keep the AA
   floor (visible focus indicator).
+- Also: delete the stale labels.ts comment claiming per-image
+  disclosure of the remote-manifest fetch "is Phase 3 work" — that
+  disclosure was dropped 2026-08-05 (roadmap round).
 - New user-facing strings are §8 wording territory — owner ask.
 - **Context:** DECISIONS.md 2026-08-03 (5.3 polish, "Recorded, not
   fixed" list), 2026-08-05 (wording pass — labels are finalized;
-  edits are an owner ask).
+  edits are an owner ask; roadmap round — the disclosure drop).
 
 ## 5. Generator-metadata provider, part 1 (PNG) — queued
 
