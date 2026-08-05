@@ -237,7 +237,11 @@ function ensureHost(): ShadowRoot {
     host.addEventListener(type, (event) => event.stopPropagation());
   }
 
-  shadowRoot = host.attachShadow({ mode: "open" });
+  // Closed: the analysis may have acquired bytes the page itself cannot
+  // read (the worker's credentialed CORS-exempt fallback), so the verdict
+  // and its provenance details must not be readable by page script via
+  // host.shadowRoot. This module keeps the only reference.
+  shadowRoot = host.attachShadow({ mode: "closed" });
   const style = document.createElement("style");
   style.textContent = BADGE_STYLE;
   shadowRoot.append(style);
@@ -354,7 +358,14 @@ function closePopover(refocusBadge = false): void {
   const entry = badges.get(image);
   if (entry) {
     entry.element.setAttribute("aria-expanded", "false");
-    if (refocusBadge || hadFocus) entry.element.focus();
+    // Escape (refocusBadge) is deliberate keyboard navigation: plain
+    // focus() may scroll the badge into view, keeping the focus indicator
+    // visible. Every other close path rescues focus only so it does not
+    // drop to <body>, and must not move the page: an outside click after
+    // scrolling away used to yank the viewport back to the badge
+    // (task-5.5 soak finding).
+    if (refocusBadge) entry.element.focus();
+    else if (hadFocus) entry.element.focus({ preventScroll: true });
   }
 }
 
@@ -423,8 +434,15 @@ function openPopoverFor(image: HTMLImageElement): void {
   document.addEventListener(
     "pointerdown",
     (event) => {
-      const path = event.composedPath();
-      if (path.includes(element) || path.includes(entry.element)) return;
+      // The shadow root is closed, so composedPath() seen from a
+      // document-level listener stops at the host — the panel and badge
+      // themselves are not in the visible path. The host is an exact
+      // stand-in: it is 0×0 with pointer-events: none, so any event
+      // routed through it originated on overlay pixels. (A pointerdown on
+      // a *different* image's badge also passes; openPopoverFor closes
+      // this panel when that badge's click opens its own.)
+      const overlayHost = shadowRoot?.host;
+      if (overlayHost && event.composedPath().includes(overlayHost)) return;
       if (isRootScrollbarPointerdown(event)) return;
       closePopover();
     },

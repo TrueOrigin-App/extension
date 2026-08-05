@@ -55,6 +55,23 @@
     </figure>
 
     <figure>
+      <img
+        src="/fixtures/ai_expired.png"
+        alt="Expired-certificate AI declaration fixture"
+      />
+      <figcaption>
+        <strong>ai_expired.png</strong> — real GPT-4o-era ChatGPT provenance
+        whose signing certificate has since expired, with no trusted timestamp
+        (owner decision 2026-08-04). Content hashes verify, so the declaration
+        is real but its timing is unprovable. Expected badge:
+        <em>AI — likely</em> (probabilistic, never “declared”); the popover
+        disclosure should say the statement “can't be fully verified”, with
+        “Signed by OpenAI”, “Declares: Created with an AI model”, and the
+        <code>signingCredential.expired</code> technical detail.
+      </figcaption>
+    </figure>
+
+    <figure>
       <img src="/fixtures/C.jpg" alt="C2PA test-signed fixture" />
       <figcaption>
         <strong>C.jpg</strong> — valid manifest, test-CA signer, no origin
@@ -101,6 +118,38 @@
       </figcaption>
     </figure>
 
+    <figure>
+      <img
+        id="strict-cors-figure"
+        alt="AI-declared fixture via a strict-CORS origin"
+      />
+      <script>
+        // The strict-CORS figure must come from a different *origin* on
+        // the same server: same port as the page (serve.mjs honors PORT,
+        // so a hard-coded port would silently break the whole tier on any
+        // other port), opposite host. Host flipped rather than fixed so
+        // the tier also works when the page is opened via 127.0.0.1.
+        (() => {
+          const image = document.getElementById("strict-cors-figure");
+          const host =
+            location.hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
+          image.src = `http://${host}:${location.port}/fixtures/ai_declared.png`;
+        })();
+      </script>
+      <figcaption>
+        <strong>ai_declared.png (cross-host)</strong> — same fixture served
+        cross-origin with no CORS headers (<code>localhost</code> and
+        <code>127.0.0.1</code> are different origins, and this server never
+        sends <code>Access-Control-Allow-Origin</code>). In-page byte
+        acquisition must fail at the CORS layer, and the task-5.5 worker
+        fallback must acquire the bytes instead: expected badge
+        <em>AI — declared</em>. The page network panel shows the render request
+        plus <strong>two</strong> CORS-blocked analysis attempts (the
+        force-cache rung, then the no-cache revalidation — both red, expected);
+        the worker panel shows the fallback fetch to the cross-host origin.
+      </figcaption>
+    </figure>
+
     <h2>Popover checks (task 5.3)</h2>
     <ul>
       <li>
@@ -140,6 +189,16 @@
       <em>(inactive)</em>, reopen the inspector (this restarts the worker with
       an empty verdict cache), then reload this page.
     </p>
+    <p>
+      First, one request appears in <strong>every</strong> tier: the strict-CORS
+      figure's fallback fetch to the cross-host origin (task 5.5), once per
+      analysis, after that figure scrolls into view. Neither cache can skip it —
+      the worker's content-hash cache can only recognize bytes it has already
+      fetched, and the page-view URL cache that would skip the fetch dies with
+      the page. (The worker panel also accumulates entries across page reloads
+      while the inspector is open, so N reloads leave N of these listed.) Beyond
+      that, the tiers differ:
+    </p>
     <ul>
       <li>
         <strong>Cold worker, cold trust cache</strong> (first run in 24 h): five
@@ -155,19 +214,30 @@
       </li>
       <li>
         <strong>Warm worker</strong> (any reload while the inspector stays open,
-        or within ~30 s of the last analysis): possibly no requests at all — the
+        or within ~30 s of the last analysis): no additional requests — the
         task-5.2 verdict cache recognizes the image bytes and skips re-analysis,
         including the manifest fetch.
       </li>
     </ul>
-    <p>In every tier, nothing else — no media bytes, no page URLs.</p>
+    <p>
+      In every tier, nothing else — no media bytes, no page URLs. A fixture URL
+      on the <em>page's own host</em> appearing in the worker panel would be a
+      bug (the fallback firing for a same-origin image). The cross-host fetch
+      itself appears once per analysis attempt: a failed first analysis may
+      legitimately add one retry (the extension allows two attempts per scan
+      cycle, and a source change restarts the cycle) — a steady stream of them
+      is a bug.
+    </p>
     <p>
       In the <strong>page's</strong> network panel (task 5.2, double-fetch
-      collapse): each fixture URL appears exactly twice — the render request
-      from the network, then the analysis fetch served from
+      collapse): each same-origin fixture URL appears exactly twice — the render
+      request from the network, then the analysis fetch served from
       <em>(disk cache)</em> / <em>(memory cache)</em>, never from the server.
-      The duplicate figure above adds no request of its own. The server logs one
-      hit per fixture per load.
+      The duplicate figure adds no request of its own; the strict-CORS figure
+      adds its render plus two CORS-blocked analysis attempts (both rungs of the
+      in-page ladder — the counts acquire.test.ts pins). The server log (one
+      line per hit, with the requested host) makes the same story visible
+      server-side.
     </p>
   </body>
 </html>

@@ -1704,3 +1704,617 @@ dispatch) verified the review fixes and caught two bugs jsdom could not:
   - Revisit only if Chrome removes or degrades the built-in item.
   - Next per §8 order: task 5.5 (byte-acquisition CORS fallbacks),
     informed by the daily-driver soak.
+
+## 2026-08-03 — Task 5.5: byte-acquisition CORS fallbacks
+
+The last Phase 2 item. Everything here is free-choice territory: no
+manifest changes (the host permissions granted in 5.1 are what make the
+fallback possible), no new dependencies, no SignalProvider/SignalResult
+changes, no user-facing wording. The daily-driver soak (§6 cadence note)
+continues after this lands and may retune the constants.
+
+### The acquisition ladder: force-cache → no-cache → worker-side fetch
+
+- **What:** in-page acquisition (unchanged from 5.2) now falls back to a
+  worker-side fetch when the page context cannot read the bytes: a new
+  `trueorigin:analyze-url` message asks the worker to fetch the URL under
+  its host permissions (CORS-exempt) and run the same pipeline. Fallback
+  triggers: `TypeError` from both in-page cache modes (the strict-CORS
+  signature — the dominant deterministic failure class since 5.1) and
+  HTTP error statuses (hosts that 403 Origin-carrying requests they
+  serve happily without one; the worker's request is exempt from that
+  refusal class too). Deliberately **not** a trigger: timeouts — a 30 s
+  stall is origin slowness, the worker would pay the same 30 s for the
+  same likely outcome, and the 5.2 retry budget already re-attempts
+  transient stalls on viewport re-entry. data:/blob: URLs never fall
+  back (data: decodes in-page without CORS; blob: handles are scoped to
+  the page's context and unreachable from the worker).
+- **Why worker fetch stays the fallback, not the primary:** unchanged
+  from the 5.2 rejection — the extension's cache partition can never hit
+  the page's HTTP-cache entry (guaranteeing a network fetch) and the
+  request lacks the page's Referer, so its bytes are less certainly the
+  render's bytes. The divergence risk is accepted only on paths where
+  the in-page bytes are unreachable anyway; the module headers record
+  it, and the text/* guard below catches the catastrophic form.
+- **Rejected:** canvas readback as a further fallback (drawing the image
+  and re-encoding strips the C2PA container — the fallback would destroy
+  the very evidence it exists to read; useless for provenance by
+  construction); an offscreen-document fetch (same partition problem as
+  the worker plus an `offscreen` permission ask).
+
+### Worker fetch policy (`src/background/fetch-image.ts`)
+
+- **`credentials: "include"`, mirroring the render request.** The render
+  sent the user's cookies; an anonymous refetch is likelier to be
+  answered with a different representation — or a login/challenge page —
+  than the bytes on screen, and cookie-gated CDN images (the class the
+  5.4 evaluation highlighted) would fail outright. Chrome exempts
+  extension-initiated requests to hosts the extension has permissions
+  for from SameSite blocking, so the cookies attach in practice.
+  Constraint 3 intact: the request goes only to the image's own host —
+  the host that already served these bytes to this user — carrying
+  nothing but the image URL it already knows. **Rejected:**
+  `credentials: "omit"` (a more "anonymous" posture, but it maximizes
+  representation divergence, which is the actual privacy-adjacent harm
+  here — a verdict about bytes the user never saw).
+- **Same Accept pin** (`IMAGE_ACCEPT`, the shared constant 5.2 moved to
+  `src/lib/` for exactly this) for the same `Vary: Accept` reason.
+- _*text/* responses are rejected_*, not analyzed: the render displayed
+  an image, so a text reply means this context was served something else
+  (login redirect, bot challenge). Feeding it to the pipeline would
+  yield finding "none" → an "Unknown" badge describing bytes that are
+  not the image. Other non-image types pass through (parity with the
+  in-page path, which also forwards whatever Content-Type it got).
+- **Non-http(s) URLs are refused before fetching** — defense in depth
+  should a compromised renderer ever forge the message.
+- **Pinnability is computed by the worker and returned in the reply**
+  (`pinned` on `AnalyzeUrlResponse`): only the worker saw the response
+  headers, and the content script's URL cache must apply the same
+  no-store retention rule to fallback verdicts as to its own. The
+  previously duplicated predicate is now shared
+  (`isPinnableResponse`, `src/lib/image-accept.ts`), as is the fetch
+  timeout.
+
+### Oversized transport routes through the worker fetch
+
+- **What:** in-page acquisitions larger than 32 MiB
+  (`MAX_INLINE_TRANSPORT_BYTES`) skip the message channel and use the
+  worker-fetch path even though the bytes were readable in-page.
+- **Why:** `sendMessage` JSON-serializes, so bytes travel as base64 (4/3
+  inflation) against Chrome's 64 MB message cap — a ~48 MiB image dies
+  in transport with an opaque error. 32 MiB of bytes is ~44.7 MB of
+  base64: comfortably under the cap while covering essentially every
+  real image. Cost accepted: the worker re-fetches from its own
+  partition on this rare path. Oversized data:/blob: payloads (which
+  the worker cannot fetch) still attempt inline transport and surface
+  as an analysis failure if the channel refuses them.
+- **Rejected:** chunked multi-message transport (protocol machinery for
+  a case the fallback already handles); skipping large images silently
+  (a silent coverage hole, and large images skew toward exactly the
+  high-resolution photography provenance matters for).
+
+### Verdicts in which no check completed do not badge (5.2/5.3 deferral)
+
+- **What:** the policy half of the "degraded verdicts still badge"
+  finding, resolved: a verdict carrying provider failures and **zero**
+  collected signals is rejected in `acquire.ts` (`assertCompleted`) and
+  takes the same path as any failed analysis — no badge, never cached
+  (both layers already refused retention), bounded by the 5.2 retry
+  budget, healable on viewport re-entry. A verdict mixing completed
+  signals with failures still renders, with the 5.3 popover disclosure
+  as its honesty mechanism — that split is now pinned by test.
+- **Why:** with a single provider, "failures only" means the one check
+  errored — epistemically identical to the analysis failing, which
+  task 4 already decided renders nothing ("a failed check supports no
+  claim, not even Unknown, which the mapper reserves for checks that
+  ran"). Badging Unknown from a WASM init failure while both caches
+  refuse to retain it was the two-layer incoherence the 5.2 review
+  called out; this aligns the badge with the caches instead of the
+  caches with the badge.
+- **Placement:** in the content script's acquisition layer, not the
+  worker — the worker reports pipeline results faithfully; badge policy
+  belongs to the surface that badges. Throwing (rather than filtering at
+  render) shares the rejection with every coalesced same-URL caller and
+  keeps it out of the URL cache by the existing no-cached-rejections
+  rule.
+
+### Acquisition extracted to `src/content/acquire.ts`
+
+- The ladder, transport, and policy logic moved out of the content
+  script's DOM wiring into a URL-in/verdict-out module with no element
+  coupling — same falsifiability rationale as the jsdom batch: the 5.2
+  force-cache → no-cache recovery was previously untestable (and
+  untested); now the whole ladder is pinned (`acquire.test.ts`, 13
+  tests), including which rung runs for which failure class and what
+  crosses the message channel. `fetch-image.test.ts` is the
+  background-level counterpart of the provider egress suite: it pins
+  that the handler fetches exactly the requested URL, once, with the
+  pinned Accept header and credentials.
+
+### Test page: live strict-CORS fixture
+
+- `index.html` adds ai_declared.png referenced via
+  `http://127.0.0.1:8917` — a different origin than the `localhost` page,
+  from a server that (deliberately, now documented) sends no
+  `Access-Control-Allow-Origin`. In-page acquisition fails at the CORS
+  layer for real, and the badge can only come from the worker fallback.
+  The audit checklist now expects the fallback fetch in the worker panel
+  in every warmth tier (the page-view URL cache dies with the page, so
+  the worker must re-acquire the bytes before its hash cache can
+  recognize them), and `serve.mjs` logs the requested host per hit so
+  render, blocked in-page attempt, and worker fetch are tellable apart
+  server-side.
+
+### Soak notes (what daily-driver use should watch, task 5.5 edition)
+
+- Frequency of the fallback firing (each firing is a doubled fetch for
+  that image — if it dominates on some major CDN, revisit).
+- text/* rejections in the console: each is a host where even the
+  credentialed worker fetch got a challenge page — a coverage hole to
+  characterize before Phase 3's privacy write-up.
+- Whether the fallback's requests in the worker network panel ever look
+  different from the render's own (same URL, same redirect chain — the
+  fetch follows redirects exactly as the render did; anything beyond
+  that would contradict the constraint-3 story and needs investigating).
+
+## 2026-08-04 — Task 5.5 soak findings, first batch (same PR)
+
+Three owner-reported findings from daily-driver use. Two fixed here; one
+recorded and deliberately kept on the Phase 3 docket.
+
+### Popover dismissal no longer hijacks scroll position (fixed)
+
+- **Report:** open a popover, scroll the page, click anywhere — the
+  popover closes and the page jumps back to where the badge was.
+- **Cause:** the 5.3 focus rescue. `closePopover` hands focus back to
+  the badge whenever the departing panel contained it (so keyboard focus
+  never silently drops to `<body>`), and a bare `focus()` scrolls the
+  focused element into view — turning every pointer dismissal after a
+  scroll into a viewport yank.
+- **Fix:** the rescue distinguishes intent. Escape — deliberate keyboard
+  navigation — keeps plain `focus()`, scrolling the badge into view so
+  the focus indicator stays visible (WCAG 2.4.11 direction). Every other
+  close path (outside click, reaps, re-render collapses) rescues with
+  `focus({ preventScroll: true })`: focus continuity without moving the
+  page. Pinned by test in both directions.
+- **Rejected:** skipping the rescue entirely on pointer dismissals (the
+  browser's own mousedown focus handling usually overrides it anyway,
+  but when the click target chain is non-focusable, the rescue is still
+  what keeps Tab order anchored near the content the user was reading).
+
+### Min-size gate raised to 96 px (fixed; still provisional)
+
+- **Report:** badges appear on icons — images that should not be
+  analyzed at all.
+- **Change:** `MIN_IMAGE_DIMENSION_PX` 64 → 96 (short side, layout
+  metric; the ResizeObserver revival shares the constant, so gate and
+  revival stay aligned). At 64, large icons, avatars, and app tiles in
+  the 64–95 px band were analyzed and badged, and the ~24 px badge pill
+  visually dominates images that size. 96 keeps typical content
+  thumbnails (≥ ~100 px) while dropping the icon band. Skipping happens
+  before analysis, so this also cuts wasted fetches and WASM runs.
+- **Note:** like the other scheduling constants this is soak-tunable;
+  if real thumbnails start getting skipped, 96 is one line to revisit.
+
+### Badges paint over Google's search-suggestions dropdown (recorded, not fixed)
+
+- **Report:** on Google, the search box's suggestion dropdown opens and
+  badges from result images beneath it paint on top of the list.
+- **Assessment:** this is the first concrete real-site instance of the
+  5.3 deferred finding (overlay at max z-index vs. page UI stacked above
+  images). Google's dropdown is a plain z-indexed div, not top-layer UI
+  (`<dialog>`/popover API would paint above us), so our host wins the
+  stacking contest. The 5.3 analysis still holds: every yield-on-cover
+  heuristic evaluated (elementsFromPoint at sync or click time) misfires
+  on the stretched-link card pattern — hiding badges exactly where they
+  matter most — and any fixed lower z-index just loses somewhere else.
+  Phase 3 owns the real fix (smaller badge, or a cover heuristic built
+  against a corpus of real sites, of which google.com is now the first
+  entry). The 96 px gate above incidentally removes the worst cases
+  where the covered "image" was itself an icon-sized thumbnail.
+- **Third candidate (owner question, 2026-08-04):** matching the image's
+  z-index is impossible in principle — z-index only orders siblings
+  within one stacking context, and occlusion is decided by the ancestor
+  chains, not by any number on the image — but the underlying goal
+  ("badge covered exactly when its image is covered") has a
+  construction-correct form: inject each badge into the page DOM as a
+  positioned sibling of its image, sharing its stacking context,
+  clipping, and scrolling by definition. Rejected at task 4 for
+  DOM-safety (host layout, framework reconciliation, page CSS selectors,
+  self-filtering observers); goes on the Phase 3 docket as the
+  alternative to heuristics, to be weighed against that risk.
+
+## 2026-08-04 — Expired-cert AI declarations map to "AI — likely" (owner decision)
+
+A soak finding with product-wide reach, resolved by the owner after the
+options were presented (this touches §2 verdict semantics, so it was an
+ask, not a free choice).
+
+### The finding
+
+The owner's GPT-4o-era ChatGPT image (real OpenAI provenance: two-manifest
+chain signed "OpenAI" via "Truepic Lens CLI in Sora", `c2pa.created` by
+GPT-4o with `trainedAlgorithmicMedia`) badged **Unknown**. Diagnosis
+against the real WASM with production trust lists: every content check
+passes — data hashes match, chain anchors to the trust list, claim
+signature valid — but `signingCredential.expired` fails, and that era of
+OpenAI's pipeline attached **no trusted timestamp**, so there is no
+independent proof the signature predates the cert's expiry. c2pa-rs rules
+the store `Invalid`; the task-3 mapping ("not Valid/Trusted → none") made
+it Unknown. Impact class: every un-timestamped AI provenance ages into
+this state as its short-lived signing certs expire — plausibly the
+largest population of real AI images on the web.
+
+### The decision (owner-selected from three options)
+
+Map the narrow class to **`ai-indicated`, confidence 0.9**
+(`EXPIRED_AI_DECLARATION_CONFIDENCE`) → verdict **"AI — likely"**:
+
+- **Qualifying conditions (all required):** validation state `Invalid`;
+  an AI source type present in the chain; `signingCredential.expired`
+  among the failure codes; and every failure code in the tolerated set
+  {`signingCredential.expired`, `signingCredential.untrusted`}.
+- **Why untrusted rides along:** the task-3 accept-AI-at-Valid policy
+  already takes AI declarations from untrusted signers at full
+  `ai-declared` strength — an untrusted signer cannot coherently block
+  the strictly weaker probabilistic finding. (Verified: under production
+  anchors the OpenAI fixture fails with `expired` alone; under the
+  vendored test anchors `untrusted` joins it.)
+- **Why not revocation or content failures:** a revoked cert is the
+  leaked-cert scenario itself, and any hash/assertion failure means the
+  manifest may not describe these bytes — both stay `invalid-manifest`.
+- **Why 0.9:** hash-verified bytes, provably what the declarer signed —
+  high; timing unprovable (backdating with a leaked expired cert is
+  unfalsifiable) — short of the 1.0 that §2 reserves for cryptographic
+  certainty. Clears `AI_LIKELY_MIN_CONFIDENCE` (0.7), so the verdict is
+  the probabilistic one §2 already defines, labeled as probabilistic.
+- **Asymmetry preserved (§2):** expired _capture_ claims get no
+  forgiveness — still `invalid-manifest` → Unknown. Forging "human" is
+  the attack that matters. Pinned by test.
+- **Rejected:** keeping Unknown (the strictest reading writes off the
+  biggest real-world AI class while its declarations are hash-verified);
+  accepting as `ai-declared` (overclaims — §2 pins that verdict to
+  cryptographic confidence that expired-without-timestamp cannot
+  deliver).
+
+### Mechanics
+
+- `mapManifestStore` now owns the confidence scale (`MappedStore` gained
+  `confidence`; the provider passes it through instead of pinning 1/0 by
+  finding). New detail reason `expired-ai-declaration`; the presenter
+  registry's compiler-exhaustive `SUMMARIES` forced the popover copy at
+  compile time (placeholder wording, Phase 3 refines).
+- **Fixture:** the owner's image is vendored as
+  `fixtures/ai_expired.png` (README updated) — integration tests pin the
+  provider mapping and the end-to-end "AI — likely" verdict against the
+  real WASM, the egress suite pins that expiry handling makes no network
+  requests (no OCSP/CRL/TSA lookups), and the test page gains the
+  figure. This fixture is stable by nature: the cert stays expired.
+- **Phase 3 wording note:** the verdict-level "AI — likely" explanation
+  ("Detection signals suggest…") was written for classifier signals;
+  for this path the specifics live in the disclosure summary. Fine as
+  placeholder; the Phase 3 pass should make the verdict line cover both
+  sources honestly.
+- **Watch item (pinned down 2026-08-04, owner follow-up):**
+  `ai_declared.png` (newer OpenAI pipeline) IS on the C2PA conformance
+  trust list — production config validates it **Trusted** — and it does
+  carry a timestamp, but that timestamp is signed by OpenAI's own TSA
+  ("OpenAI TSA Leaf"): `timeStamp.validated` (digest matches) yet
+  `timeStamp.untrusted` (the TSA is not on the C2PA TSA trust list). An
+  untrusted timestamp cannot establish signing time, so the expiry
+  forgiveness that keeps e.g. DigiCert-timestamped manifests verifiable
+  after cert expiry will not apply. When this cert expires: if the
+  conformance TSA list has added OpenAI's TSA by then (it is fetched
+  live, so the fixture heals automatically), nothing changes; otherwise
+  the fixture flips to Invalid + expired, the mapping above keeps the
+  product verdict sane ("AI — likely"), and the CI assertions pinning
+  Trusted/ai-declared will need updating.
+
+## 2026-08-04 — Future task (owner-approved): unsigned generator-metadata provider
+
+Queued during the task-5.5 soak, after the expired-cert discussion
+established that the C2PA mapping now covers everything C2PA can honestly
+say. This is the next growth path for "AI — likely", approved by the
+owner as a docket item — not yet scheduled.
+
+- **What:** a second local signal provider that reads the _unsigned_
+  generator metadata many real AI images carry: Stable Diffusion /
+  A1111 "parameters" and ComfyUI "prompt"/"workflow" PNG text chunks,
+  IPTC credits like "Made with Google AI" (Gemini), and unsigned XMP
+  `Iptc4xmpExt:DigitalSourceType` values in the AI set. Emits
+  `ai-indicated` at moderate confidence (provisionally ~0.7–0.8; below
+  the C2PA expired-declaration's 0.9 — no signature at all here), so the
+  verdict reads "AI — likely", explicitly probabilistic.
+- **Why:** the largest population of AI images in the wild (local SD
+  output, tools that never adopted C2PA) carries exactly this metadata
+  and no Content Credentials — today it all reads Unknown. The signal is
+  trivially strippable and forgeable, which is precisely what the
+  probabilistic tier is for; nobody accidentally embeds an SD prompt in
+  a family photo, so accidental false positives are rare.
+- **Architecture:** a new provider in `src/providers/` — constraint 4
+  makes this the zero-cost path (the Phase-1 exit-criterion test already
+  proves the pipeline takes a new provider with no outside changes),
+  plus a presenter entry for the popover. Runs in the worker on the
+  bytes already acquired; no new permissions, no network.
+- **§8 flags for the implementation session:** parsing PNG text chunks
+  and basic EXIF/XMP by hand is feasible; if a parsing library is
+  preferred instead, that is a new-runtime-dependency ask. Popover
+  wording for the new signal is placeholder-then-Phase-3 like the rest.
+- **Open design questions:** exact marker list and how conservative to
+  be (a bare "Software: xyz" EXIF name is weaker evidence than a full SD
+  parameters block — the task-3 rejection of name matching stays binding
+  for signed C2PA fields, but this provider's whole domain is heuristic,
+  so it needs its own recorded line); confidence value; whether a
+  detected-but-below-threshold marker should still surface in the
+  popover's evidence list (the pipeline already supports it —
+  below-threshold signals stay visible in `Verdict.signals`).
+
+## 2026-08-04 — State at task 5.5 close / handoff notes
+
+Task 5.5 and its soak follow-ups are complete on PR #6
+(`task-5.5-cors-fallbacks`, CI green, description current — including the
+one owner-decided verdict-semantics change). 185 tests green; live pass
+in Chrome verified the CORS fallback end to end. With 5.1–5.5 done, the
+§8 task order is exhausted: **Phase 2 is code-complete**, pending the §6
+cadence gate (multi-day daily-driver soak) before it is declared done.
+
+Open items, consolidated for whoever picks this up:
+
+- **Merge PR #6** when review satisfies; branch protection note from the
+  5.2 entry still applies (owner flips the setting).
+- **Soak continues.** Constants raised/tuned this session
+  (96 px min-size gate, dwell/concurrency/lookahead, 32 MiB transport
+  ceiling, verdict-cache caps) are all provisional against soak feel.
+  Watch specifically: fallback-fetch frequency per CDN, text/* rejection
+  sightings, popover feel after the scroll-hijack fix.
+- **"Human — verified" fixture still missing** (plan.md task-order
+  note): needs a capture-signed photo from a trust-listed device
+  (recent Pixel with Content Credentials, Leica M11-P, Sony/Nikon/Canon
+  C2PA firmware, or a published Content Credentials sample). The
+  verdict is unreachable end-to-end until then — by design.
+- **Deliberate CI tripwire:** `ai_declared.png`'s OpenAI signing cert
+  will eventually expire; its timestamp is from OpenAI's own TSA (not
+  on the C2PA TSA list), so Trusted/ai-declared assertions will fail
+  that day unless the conformance TSA list adds it first. Owner chose
+  to leave it. The product behavior at that point is the new
+  expired-declaration mapping ("AI — likely"); only test expectations
+  need updating. Option recorded if it becomes annoying: freeze the
+  clock the WASM sees (it reads JS `Date.now()`).
+- **Phase 3 docket** (from this session): badge occlusion by page
+  overlays (three candidates recorded — smaller badge, cover
+  heuristic, in-DOM sibling injection); "AI — likely" verdict-line
+  wording now covers two sources (classifier-style signals and the
+  expired-declaration path) and should be reworded accordingly;
+  contextual "look this image up" popover link (from 5.4).
+- **Future task (owner-approved):** unsigned generator-metadata
+  provider (previous entry). Note plan.md §6 frames the first
+  non-C2PA provider as Phase 4 paid-tier territory — this one is local
+  and free, so the owner may want to amend the plan's framing when
+  scheduling it (plan.md is owner-authored; not edited from here).
+- **Known-open from 5.1 (unchanged):** shadow-DOM image discovery
+  (Lit sites like Reddit), `all_frames` iframes, CSS-animation badge
+  re-anchoring gap.
+- **Next per plan.md:** the second `/impeccable init` pass (the
+  post-soak re-interview, the authoritative one) opens Phase 3.
+- Housekeeping: `ai_image.png` in the repo root is the owner's scratch
+  copy of the vendored `fixtures/ai_expired.png` — untracked,
+  deletable.
+
+## 2026-08-04 — Code-review fixes on task 5.5 (PR #6)
+
+An adversarial review of the branch confirmed one taxonomy violation and
+a cluster of acquisition-path defects. Fixes 1–8 below are applied;
+review items 9 (credential asymmetry of the in-page rungs) and 11 (the
+strict-CORS triple-fetch cost) are deliberately **not** decided here —
+they need an owner call and are listed at the end.
+
+- **Expired-AI exception now gates on failures recorded anywhere in the
+  store, including ingredient entries.** `failureCodesOf` previously read
+  only store-level `validation_results` (active manifest + ingredient
+  _deltas_) and legacy `validation_status`; a content failure recorded at
+  ingredient time (e.g. `assertion.dataHash.mismatch` on the AI
+  ingredient itself) lives on `manifests[*].ingredients[*]` and was
+  invisible — so an AI declaration whose hashes never verified could be
+  promoted to "AI — likely" (§2 violation, review-confirmed by
+  execution). Now ingredient `validation_results`/`validation_status`
+  failures count, which also makes the invalid-manifest popover detail
+  more complete. Alternative rejected: restricting the exception to the
+  active manifest — the owner decision it implements is explicitly about
+  declarations anywhere in the store.
+- **The worker fallback fetch refuses redirects** (`redirect: "manual"`;
+  an `opaqueredirect` or raw 3xx fails the acquisition). The fetch is
+  CORS-exempt and credentialed under broad host permissions, so
+  following redirects let the image host steer a cookie-bearing request
+  at intranet/localhost targets — and falsified the module's
+  constraint-3 claim that the only request goes to the image's own host.
+  Cost: images behind redirecting URLs lose the fallback verdict
+  (fail-closed). Alternatives rejected: post-hoc `response.url` origin
+  check (the request has already been made — that is the harm);
+  validate-and-follow via Location (unreadable through the
+  opaqueredirect filter).
+- **The badge overlay's shadow root is closed.** With the credentialed
+  fallback, an open root converted images the page can render but not
+  read into page-readable provenance (verdict text, signer, title via
+  `host.shadowRoot`). Closed mode required one behavioral companion: the
+  popover's light-dismiss check now tests for the _host_ in
+  `composedPath()` (the path no longer exposes shadow-internal nodes to
+  document-level listeners; the host is an exact stand-in because it is
+  0×0 and pointer-events: none). Tests capture the root by wrapping
+  `attachShadow`; a new test pins `host.shadowRoot === null`.
+- **One shared not-the-rendered-image guard on both acquisition paths**
+  (`imageMimeTypeFor` in image-accept.ts), replacing the worker-only
+  `text/*` check and the URL-extension MIME fallback. Declared image/*
+  types are trusted; any other declared type fails the analysis (the
+  in-page path previously analyzed an HTML login page into an "Unknown"
+  badge — review-confirmed); no declaration (or octet-stream) resolves
+  by magic-byte sniffing (JPEG/PNG/GIF/WebP/TIFF/AVIF; SVG by
+  document-start inspection), never by URL extension — which typed an
+  extensionless HTML challenge named photo.jpg as image/jpeg
+  (review-confirmed bypass). Side effects: octet-stream-served real
+  images now analyze (sniffed), and the `new URL("")` crash on
+  service-worker-synthesized responses dissolves (the URL is no longer
+  consulted). An in-page guard failure escalates to the worker once: the
+  in-page analysis fetch is cookieless cross-origin, so a session-gated
+  host may have served it a challenge it would not serve the worker's
+  cookie-bearing request.
+- **64 MiB ceiling on the worker fetch body, enforced while streaming.**
+  The worker path is the deliberate destination for >32 MiB images, so
+  the ceiling sits above the transport cap with margin, but unbounded
+  bodies could OOM the MV3 worker (killing every pending analysis).
+  Content-Length is checked first for the honest case; the streamed
+  count is the enforcement (header can be absent, wrong, or compressed
+  — the reader yields decoded bytes), and never more than the ceiling
+  is held. 128 MiB rejected (two copies + hash approach worker memory
+  limits); "no cap, rely on timeout" rejected (bounds time, not size).
+- **A `sendMessage` rejection on the inline path now falls back to the
+  worker fetch** (`TransportError`): the channel refusing the payload is
+  not an analysis failure, and the worker fetch does not ship bytes over
+  the channel at all. data:/blob: payloads still surface the error (the
+  worker cannot fetch those; pre-existing policy).
+- **Only 401/403 escalate an in-page HTTP error to the worker.** The
+  escalation exists for Origin-conditioned refusals; 404/5xx cannot be
+  cured by the worker's request, and re-hitting a 429 with a second,
+  credentialed fetch would amplify the limit it just signalled.
+- The acquire.ts header no longer claims the in-page path shares the
+  render's full request context — on a cross-origin cache miss the
+  analysis fetch carries no cookies where the render did.
+
+**Open (owner call needed, from the same review):** (a) whether in-page
+analysis fetches should send `credentials: "include"` to actually mirror
+the render, or the divergence stays accepted-and-documented; (b) the
+strict-CORS path still costs ~3 origin requests / 2 downloads per image
+(the no-cache rung is a guaranteed-blocked round trip there, but is not
+simply removable — its TypeError is indistinguishable from the
+recoverable task-5.2 case); (c) test-page port hard-coding, checklist
+fetch-count corrections, and an onMessage wiring test (review items
+12–14) remain unapplied.
+
+## 2026-08-04 — Owner decisions on the review's open items
+
+- **Strict-CORS fetch waste (review item b): designs #1+#2 accepted** —
+  per-page-view negative memory (URL-level certain, origin-level hint;
+  in-page path skipped once proven CORS-blocked) plus a short-TTL
+  negative cache for acquisition failures (cleared with the scheduler's
+  reset so transient failures cannot go sticky). **#3 (webRequest header
+  observation) rejected on permission posture:** it would not violate
+  constraint 3 (all local), but it grants observational power over all
+  page traffic to read one header — the opposite of the minimum-viable
+  posture the trust story sells. Queued as a follow-up task, not part
+  of the review-fix diff.
+- **Credential asymmetry (review item a): resolved** — rung 2 (the
+  no-cache revalidation) now sends `credentials: "include"`; rung 1
+  (force-cache) stays uncredentialed, and the residual divergence is
+  accepted. Why this split: a credentialed CORS read requires an
+  exact-origin ACAO plus Allow-Credentials, so include on rung 1 would
+  break the common `ACAO: *` cache reads that are the double-fetch
+  collapse — and the cache-hit path needs no cookies anyway (the entry
+  was stored by the render's own cookie-bearing request). Rung 2 always
+  hits the network, where the render did send cookies, and it only runs
+  after rung 1 failed, so nothing that works today is affected; if a
+  server refuses the credentialed read, the worker fallback's
+  cookie-bearing fetch cures it. **Accepted residual:** a rung-1 cache
+  _miss_ (no-store render, evicted entry) goes to the network
+  cookieless, so a session-gated host serving `ACAO: *` can hand the
+  analysis a different representation undetected. Closing it needs
+  credentialed-first-with-retry, which taxes every uncached `ACAO: *`
+  image (the common case) with a doubled round trip — rejected. Full
+  alternatives analysis in the session log.
+
+## 2026-08-04 — Review follow-ups implemented (same session)
+
+The accepted designs above plus review items 12–14, applied:
+
+- **Acquisition memory (acquire.ts, per page view).** CORS-blocked
+  memory records a URL only when both in-page rungs TypeErrored _and_
+  the worker fetch then succeeded — worker success is what rules out
+  offline/DNS, so nothing transient can be "proven". Origin hint
+  threshold: **2 distinct proven URLs** (1 felt too eager for
+  mixed-CORS origins; the only cost of over-generalizing is losing the
+  double-fetch collapse for that origin, never a wrong verdict).
+  Failure memory: 30 s TTL, 500-entry cap, records non-escalated HTTP
+  errors and worker-leg (`ok:false`) refusals; deliberately excludes
+  timeouts (retry budget heals those) and analysis-side failures
+  (worker restarts heal those — an incomplete verdict arrives `ok:true`
+  and is rejected fresh each time). index.ts clears a URL's failure
+  entry on identity invalidation; CORS memory survives invalidation
+  (CORS is server config, not content). data:/blob: URLs bypass both
+  memories (URL-as-payload retention, same reason as the verdict
+  cache). Test seam: `resetAcquisitionMemory()`.
+- **Test page (items 12–13).** The strict-CORS figure's src is now set
+  by inline script — same port as the page (serve.mjs honors PORT; the
+  hard-coded 8917 silently disabled the tier on any other port),
+  opposite host (localhost ↔ 127.0.0.1) so the tier survives opening
+  the page by either name. Audit checklist corrected to the counts the
+  tests pin: two CORS-blocked in-page attempts per first analysis, and
+  a retry after a failed attempt is legitimate (attempt budget is 2),
+  not a bug.
+- **onMessage wiring test (item 14).** src/background/index.test.ts
+  pins: both arms return `true` synchronously (the channel-hold
+  contract), both eventually sendResponse a guard-passing reply (the
+  inline arm against the real pipeline with the provider failure
+  isolated), and unknown messages get neither. Closes the review's
+  "wiring regression ships green" gap.
+
+## 2026-08-04 — Review finding 10 (stacked timeouts), caught by owner audit
+
+Initially dropped from the fix rounds (it sat in a "fix or consciously
+accept" bucket that never got decided); the owner's completeness check
+caught it. Fix: the in-page ladder's two rungs now share **one**
+`AbortSignal.timeout(30_000)` instead of minting one each, restoring the
+pre-5.5 worst case — ≤30 s in page context plus the worker fetch's own
+≤30 s when the fallback runs (~60 s total, down from ~90 s) — so a
+stall-then-reset host can no longer hold one of the two analysis slots
+for three full budgets. The worker's own deadline stays separate by
+design (it is a different context; threading a remaining-time budget
+through the message channel was rejected as complexity without a real
+win). The timeout-never-falls-back policy is unchanged: a shared-deadline
+expiry surfaces as TimeoutError and still fails the attempt rather than
+escalating. Pinned by asserting both rungs receive the same signal
+instance.
+
+## 2026-08-04 — Live verification of the review-fix wave (owner pass)
+
+Chrome pass over `ad1cf6b`, all green:
+
+- Page network panel matches the corrected audit checklist exactly:
+  script-set strict-CORS render, two CORS-blocked in-page attempts,
+  disk-cache analysis fetches for same-origin figures (double-fetch
+  collapse intact), no request added by the duplicate figure.
+- Worker panel: exactly one cross-host fallback fetch; otherwise only
+  the WASM load and the cached cloud.jpg manifest fetch (cold-worker /
+  warm-trust-cache tier, as the checklist describes). Constraint-3
+  audit artifact: no media bytes or page URLs anywhere else.
+- Cross-host figure badges "AI — declared" via the fallback.
+- PORT override rerun works end to end (the tier the hard-coded port
+  used to silently disable).
+- Closed-shadow popover: click inside does not dismiss; outside click
+  and Escape behave as pinned.
+
+## 2026-08-04 — Phase 2 declared complete (owner decision)
+
+The owner has closed the §6 cadence gate: the daily-driver soak is done
+(its findings — scroll hijack, min-size gate, badge occlusion, the
+expired-declaration mapping, and the review wave — are all recorded and
+resolved above). With that, the §6 Phase 2 checklist is fully
+accounted for: viewport lazy scanning and verdict caching (5.1/5.2),
+popup/popover with progressive disclosure (5.3), Google Lens
+right-click resolved as skipped (5.4, owner decision), byte-acquisition
+CORS fallbacks hardened and review-verified (5.5 + fixes), and all four
+badge states implemented. **Phase 2 is complete.**
+
+Honest caveats carried forward, not gates:
+
+- **"Human — verified" has never been exercised end to end** — the
+  state is implemented and unit-tested, but the capture-signed fixture
+  (trust-listed device) was never acquired during the soak. Carries as
+  an open item; the verdict is unreachable with self-signed material by
+  design.
+- Known-open trio from 5.1 (shadow-DOM image discovery on Lit sites,
+  `all_frames` iframes, CSS-animation re-anchoring) and the Phase 3
+  docket (badge occlusion, "AI — likely" wording, popover link) carry
+  into Phase 3.
+- The `ai_declared.png` cert-expiry CI tripwire stands as documented.
+
+Next per plan.md: merge PR #6 (owner), then the second
+`/impeccable init` pass — the authoritative post-soak re-interview —
+opens Phase 3.

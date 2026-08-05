@@ -32,6 +32,14 @@ const SUMMARIES: Record<C2paDetail["reason"], string> = {
   "invalid-manifest":
     "This image has Content Credentials attached, but they did not pass " +
     "verification, so they can't be used as evidence.",
+  // The one Invalid state that still carries signal (owner decision,
+  // 2026-08-04): the declaration's content checks pass, only the signing
+  // certificate's validity window has lapsed — probabilistic, never
+  // certain.
+  "expired-ai-declaration":
+    "This image carries a signed statement that it was made with AI or " +
+    "contains AI-generated material, but the signing certificate has " +
+    "since expired, so the statement can't be fully verified.",
   "no-c2pa-metadata":
     "No Content Credentials are attached to this image. Most images on " +
     "the web don't carry any.",

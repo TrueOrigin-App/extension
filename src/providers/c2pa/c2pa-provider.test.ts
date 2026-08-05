@@ -16,7 +16,7 @@ import {
 } from "vitest";
 import { runPipeline } from "../../core/pipeline";
 import type { MediaInput, SignalProvider } from "../../core/types";
-import type { C2paDetail } from "./mapping";
+import { EXPIRED_AI_DECLARATION_CONFIDENCE, type C2paDetail } from "./mapping";
 import { activeProviders } from "../index";
 import { C2PA_PROVIDER_ID, createC2paProvider } from "./index";
 
@@ -188,6 +188,43 @@ describe("c2pa provider (real WASM)", () => {
     expect(detail.validationState).toBe("Valid");
     expect(detail.signatureIssuer).toBe("OpenAI OpCo, LLC");
     expect(detail.claimGenerator).toBe("OpenAI Media Service API");
+  });
+
+  it("maps a real expired-cert AI declaration to ai-indicated", async () => {
+    // GPT-4o-era ChatGPT image: hashes intact, chain signed by OpenAI, but
+    // the signing cert has expired and nothing timestamps the signature —
+    // the largest real-world class of aging AI provenance (owner decision
+    // 2026-08-04; DECISIONS.md).
+    const result = await provider.analyze(
+      await fixtureInput("ai_expired.png", "image/png"),
+    );
+    expect(result.finding).toBe("ai-indicated");
+    expect(result.confidence).toBe(EXPIRED_AI_DECLARATION_CONFIDENCE);
+    const detail = result.detail as C2paDetail;
+    expect(detail.reason).toBe("expired-ai-declaration");
+    expect(detail.validationState).toBe("Invalid");
+    // Under the production trust lists only `expired` fails (verified
+    // live 2026-08-04); under these test anchors the OpenAI chain is also
+    // untrusted — tolerated, because untrusted signers already pass the
+    // accept-AI-at-Valid policy at full strength.
+    expect(detail.validationFailures?.slice().sort()).toEqual([
+      "signingCredential.expired",
+      "signingCredential.untrusted",
+    ]);
+    expect(detail.aiSourceTypes).toEqual([
+      "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia",
+    ]);
+    expect(detail.signatureIssuer).toBe("OpenAI");
+  });
+
+  it("produces the AI — likely verdict end to end for the expired declaration", async () => {
+    const verdict = await runPipeline(
+      [provider],
+      await fixtureInput("ai_expired.png", "image/png"),
+    );
+    expect(verdict.verdict).toBe("ai-likely");
+    expect(verdict.basis).toHaveLength(1);
+    expect(verdict.failures).toEqual([]);
   });
 
   it("produces an unknown verdict through the full pipeline", async () => {

@@ -158,15 +158,11 @@ export function createC2paProvider(
 
       try {
         const store = reader.manifestStore();
-        const { finding, detail } = mapManifestStore(store);
-        return {
-          providerId: C2PA_PROVIDER_ID,
-          finding,
-          // Cryptographic findings pin to 1 (plan.md §3); "none" carries no
-          // signal and pins to 0.
-          confidence: finding === "none" ? 0 : 1,
-          detail,
-        };
+        // The mapping owns the confidence scale: cryptographic findings pin
+        // to 1, "none" to 0, and the expired-cert AI declaration sits
+        // between (plan.md §3; DECISIONS.md 2026-08-04).
+        const { finding, detail, confidence } = mapManifestStore(store);
+        return { providerId: C2PA_PROVIDER_ID, finding, confidence, detail };
       } finally {
         reader.free();
       }
