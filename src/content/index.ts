@@ -32,8 +32,11 @@ const DWELL_MS = 250;
 const MAX_CONCURRENT_ANALYSES = 2;
 const VIEWPORT_LOOKAHEAD = "200px";
 // Images smaller than this on their short side are page furniture (icons,
-// avatars, spacers) — skipped, not analyzed, no badge.
-const MIN_IMAGE_DIMENSION_PX = 64;
+// avatars, spacers) — skipped, not analyzed, no badge. Raised from 64
+// after the task-5.5 soak: real pages badge large icons and app tiles at
+// 64–95px, and the badge pill itself outsizes such images. Still
+// provisional; tune against soak feel.
+const MIN_IMAGE_DIMENSION_PX = 96;
 // A hung image load must never hold an analysis slot forever — two of
 // them would silently stop all scanning for the page view. (The fetch
 // itself is bounded inside acquire.ts.)

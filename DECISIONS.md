@@ -1856,3 +1856,59 @@ continues after this lands and may retune the constants.
   different from the render's own (same URL, same redirect chain — the
   fetch follows redirects exactly as the render did; anything beyond
   that would contradict the constraint-3 story and needs investigating).
+
+## 2026-08-04 — Task 5.5 soak findings, first batch (same PR)
+
+Three owner-reported findings from daily-driver use. Two fixed here; one
+recorded and deliberately kept on the Phase 3 docket.
+
+### Popover dismissal no longer hijacks scroll position (fixed)
+
+- **Report:** open a popover, scroll the page, click anywhere — the
+  popover closes and the page jumps back to where the badge was.
+- **Cause:** the 5.3 focus rescue. `closePopover` hands focus back to
+  the badge whenever the departing panel contained it (so keyboard focus
+  never silently drops to `<body>`), and a bare `focus()` scrolls the
+  focused element into view — turning every pointer dismissal after a
+  scroll into a viewport yank.
+- **Fix:** the rescue distinguishes intent. Escape — deliberate keyboard
+  navigation — keeps plain `focus()`, scrolling the badge into view so
+  the focus indicator stays visible (WCAG 2.4.11 direction). Every other
+  close path (outside click, reaps, re-render collapses) rescues with
+  `focus({ preventScroll: true })`: focus continuity without moving the
+  page. Pinned by test in both directions.
+- **Rejected:** skipping the rescue entirely on pointer dismissals (the
+  browser's own mousedown focus handling usually overrides it anyway,
+  but when the click target chain is non-focusable, the rescue is still
+  what keeps Tab order anchored near the content the user was reading).
+
+### Min-size gate raised to 96 px (fixed; still provisional)
+
+- **Report:** badges appear on icons — images that should not be
+  analyzed at all.
+- **Change:** `MIN_IMAGE_DIMENSION_PX` 64 → 96 (short side, layout
+  metric; the ResizeObserver revival shares the constant, so gate and
+  revival stay aligned). At 64, large icons, avatars, and app tiles in
+  the 64–95 px band were analyzed and badged, and the ~24 px badge pill
+  visually dominates images that size. 96 keeps typical content
+  thumbnails (≥ ~100 px) while dropping the icon band. Skipping happens
+  before analysis, so this also cuts wasted fetches and WASM runs.
+- **Note:** like the other scheduling constants this is soak-tunable;
+  if real thumbnails start getting skipped, 96 is one line to revisit.
+
+### Badges paint over Google's search-suggestions dropdown (recorded, not fixed)
+
+- **Report:** on Google, the search box's suggestion dropdown opens and
+  badges from result images beneath it paint on top of the list.
+- **Assessment:** this is the first concrete real-site instance of the
+  5.3 deferred finding (overlay at max z-index vs. page UI stacked above
+  images). Google's dropdown is a plain z-indexed div, not top-layer UI
+  (`<dialog>`/popover API would paint above us), so our host wins the
+  stacking contest. The 5.3 analysis still holds: every yield-on-cover
+  heuristic evaluated (elementsFromPoint at sync or click time) misfires
+  on the stretched-link card pattern — hiding badges exactly where they
+  matter most — and any fixed lower z-index just loses somewhere else.
+  Phase 3 owns the real fix (smaller badge, or a cover heuristic built
+  against a corpus of real sites, of which google.com is now the first
+  entry). The 96 px gate above incidentally removes the worst cases
+  where the covered "image" was itself an icon-sized thumbnail.

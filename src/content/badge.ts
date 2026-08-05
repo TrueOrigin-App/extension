@@ -354,7 +354,14 @@ function closePopover(refocusBadge = false): void {
   const entry = badges.get(image);
   if (entry) {
     entry.element.setAttribute("aria-expanded", "false");
-    if (refocusBadge || hadFocus) entry.element.focus();
+    // Escape (refocusBadge) is deliberate keyboard navigation: plain
+    // focus() may scroll the badge into view, keeping the focus indicator
+    // visible. Every other close path rescues focus only so it does not
+    // drop to <body>, and must not move the page: an outside click after
+    // scrolling away used to yank the viewport back to the badge
+    // (task-5.5 soak finding).
+    if (refocusBadge) entry.element.focus();
+    else if (hadFocus) entry.element.focus({ preventScroll: true });
   }
 }
 

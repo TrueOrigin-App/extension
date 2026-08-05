@@ -214,6 +214,10 @@ describe("popover", () => {
     expect(popoverElements()).toHaveLength(0);
     expect(badge.getAttribute("aria-expanded")).toBe("false");
     expect(focus).toHaveBeenCalledTimes(1);
+    // Plain focus() — Escape is keyboard navigation, so scrolling the
+    // badge into view keeps the focus indicator visible (contrast with
+    // the preventScroll pointer-dismiss rescue below).
+    expect(focus).toHaveBeenCalledWith();
     // Consumed: native Escape defaults (<dialog> cancel, fullscreen exit)
     // must not also fire — one keypress dismisses exactly one layer.
     expect(escape.defaultPrevented).toBe(true);
@@ -355,6 +359,11 @@ describe("popover", () => {
     // Without the rescue, focus silently falls to <body> and the next Tab
     // restarts from the top of the page.
     expect(focus).toHaveBeenCalledTimes(1);
+    // …but a pointer dismiss must not move the page: without
+    // preventScroll, dismissing after scrolling away yanked the viewport
+    // back to the badge (task-5.5 soak finding). Escape keeps the plain
+    // scrolling focus() — that path is deliberate keyboard navigation.
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it("keeps overlay interaction events from reaching page handlers", () => {
