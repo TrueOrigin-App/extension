@@ -2318,3 +2318,69 @@ Honest caveats carried forward, not gates:
 Next per plan.md: merge PR #6 (owner), then the second
 `/impeccable init` pass — the authoritative post-soak re-interview —
 opens Phase 3.
+
+## 2026-08-05 — Second `/impeccable init` pass: post-soak re-interview (Phase 3 opens)
+
+### PRODUCT.md updated (per plan.md §6 Phase 3 timing note; §8 constraint 5)
+
+- The authoritative second init pass ran at the start of Phase 3, via the
+  Impeccable init flow (interview → update, no hand-writing). Owner answers
+  (2026-08-05): Phase 2 declared complete with all soak findings already
+  recorded here; real-browsing verdict mix is almost entirely Unknown; no
+  "Human — verified" fixture was acquired during the soak.
+- What changed in PRODUCT.md: development reality (Phases 1–2 complete, soak
+  done, Phase 3 current); the detail surface is the badge popover, not a
+  browser-action popup; **real-world verdict mix recorded as durable product
+  truth — Unknown is the everyday face of the product, and Phase 3 designs
+  for that reality**; the soak-era Phase 3 docket carried in (stacking over
+  page UI, placeholder copy, the "AI — likely" line covering both evidence
+  classes, the popover "look this image up" candidate); a new capabilities
+  bullet for the two "AI — likely" evidence classes (2026-08-04 owner
+  decision); the queued generator-metadata provider noted under undecided;
+  fixtures updated (`ai_expired.png` added; HV fixture still absent,
+  unit-level only).
+- Confirmed fields — users, positioning, brand commitments, principles, the
+  AA accessibility floor — were not reopened; the interview found no reason.
+
+### Live mode not configured during init (deferred, free choice)
+
+- Init offers live-mode config for runnable web projects. Deferred: the
+  extension's UI is injected by the content script into host pages, not
+  served by the test-page server, so the live-mode file mapping needs the
+  real session flow (live-setup.md) against an actual target. Configure when
+  Phase 3 reaches browser iteration. Existing `.impeccable/config.json`
+  (detector ignores) untouched.
+
+## 2026-08-05 — Phase 3 ask round (owner decisions shaping the design)
+
+### Unknown badges appear on intent only (owner decision)
+
+- With real browsing almost entirely Unknown, the owner chose intent-gated
+  presence: Unknown badges render only when the user shows interest in an
+  image (hover/interaction); the strong verdicts (AI — declared, AI —
+  likely, Human — verified) assert themselves without prompting. An absent
+  badge means "nothing known yet." Acknowledged risk, accepted: the honest
+  default is mostly invisible in passing — the popover and (later) store
+  copy carry the "Unknown is honest" story instead.
+- This is presentation/surfacing, not taxonomy: the Unknown verdict still
+  exists, still computes, still renders on intent. §2 untouched.
+- Implementation lands with the Phase 3 badge rebuild (content-script
+  behavior: intent-gated reveal for Unknown).
+- Rejected: uniform presence for all four states (badge density on every
+  page); "Unknown recedes" middle ground (quiet-but-present marks still
+  accumulate on image-heavy pages).
+
+### Personality lives throughout, badge included (owner decision)
+
+- The badge itself carries the friendly/approachable character (shape,
+  motion, wording) — recognizable and likable at a glance, not a neutral
+  pill with a warm popover behind it. Bounded by the standing
+  anti-references (no alarmism, no enterprise density, no crypto-trust
+  gloss) and the WCAG 2.2 AA floor.
+
+### Phase 3 scope: polish only for now; store work deferred (owner decision)
+
+- This phase covers the in-page UI and verdict wording. Store listing,
+  screenshots, and the privacy write-up move to their own later effort
+  (plan.md §6 Phase 3 item deferred, not dropped).
+
