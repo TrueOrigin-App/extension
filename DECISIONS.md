@@ -2757,3 +2757,78 @@ scrolling crosses the fits-below threshold. Sidecar refreshed:
 DESIGN.md's bullet per the narrative-mapping rule (it had drifted into a
 paraphrase). Components, colorMeta, shadows, and motion all verified
 current — untouched.
+
+## 2026-08-05 — Roadmap round: docket decisions and the chunk queue
+
+A planning session over the consolidated open-item list. Owner decisions
+below; the resulting task queue lives in **ROADMAP.md** (new file — one
+chunk = one session = one PR), pointed to from CLAUDE.md. The roadmap
+holds scope and context pointers only; reasoning stays here.
+
+- **Popover "look this image up" Lens link: dropped.** The owner's
+  standing condition was that it route through Chrome's built-in Lens
+  path; no extension API can invoke a built-in context-menu item or open
+  the Lens side panel (`chrome.sidePanel` controls only the extension's
+  own panel). The only buildable form is the `lens.google.com/uploadbyurl`
+  link — the strictly weaker path the task-5.4 evaluation documented
+  (fails behind logins, cookie-gated CDNs, expiring signed URLs).
+  Shipping a feature that works less often than the gesture users
+  already have erodes trust for no gain. Revisit only if Chrome exposes
+  an API into the built-in item.
+- **Per-image remote-manifest disclosure: dropped; write-up sentence
+  kept.** The task-4 disclosure obligation splits: the privacy write-up
+  and store listing keep the one-sentence disclosure (the fetch
+  genuinely reveals asset-viewing activity to the manifest host, and
+  network-panel auditability is the brand — one sentence is cheap
+  insurance), while the per-image popover disclosure is dropped (low
+  value; remote-manifest assets are rare; the popover privacy line
+  already claims only what always holds). labels.ts's "per-image
+  disclosure of it is Phase 3 work" comment is now stale — clean up in
+  the next chunk that touches labels.ts.
+- **Instagram broken, Reddit fine (owner field report).** Instagram
+  shows no badges; diagnosis is chunk 1. Reddit working suggests the
+  5.1 shadow-DOM known-open item may be stale — the chunk confirms or
+  retires it. Instagram is React/light-DOM, so the chunk starts from
+  zero assumptions (suspects listed in the roadmap).
+- **Iframe scanning: approved in principle.** `all_frames` scanning
+  (5.1 known-open) is queued as chunk 2. The formal §8 ask still opens
+  that session — this approval covers intent, not the concrete
+  manifest/perf posture.
+- **Generator-metadata provider scheduled before Phase 4** (chunks 5–6,
+  split PNG-first then IPTC/XMP). Plan.md §6's framing of the first
+  non-C2PA provider as Phase 4 paid territory is owner-acknowledged
+  drift (this provider is local and free); amendment stays with the
+  owner.
+- **Store work ordered last** (chunks 7–10: README, privacy write-up,
+  listing + screenshots, publication), and **no Phase 4 planning** —
+  the roadmap explicitly stops at the store launch.
+- **"Human — verified" fixture parked:** owner expects no trust-listed
+  capture device or sample for a while; the verdict remains unit-tested
+  only. Carried as a parked item, not a chunk.
+- **Rejected for the queue mechanism:** tracking chunks in plan.md
+  (owner-authored; agents don't edit it), in DECISIONS.md itself (a
+  ledger, not a queue — status lines would drown the record), or in
+  session-local task tools (invisible to future sessions and to
+  reviewers). A committed ROADMAP.md is reviewable in PRs, and each
+  chunk's PR updates its own status line.
+
+## 2026-08-05 — plan.md annotated (owner-authorized, one-off)
+
+- **What:** two dated update blockquotes added to plan.md, in the house
+  style of the existing §5 update: one atop §6 (Roadmap) marking Phases
+  1–2 complete and Phase 3 partially shipped, with ROADMAP.md
+  superseding §6/§8 as the task source and the generator-metadata
+  provider framing correction; one atop §8's task order marking it
+  exhausted while everything else in §8 stays in force.
+- **Why this is an exception, not a precedent:** plan.md is
+  owner-authored and the standing rule (recorded 2026-08-04) is that
+  sessions don't edit it. The owner explicitly authorized these two
+  annotations in conversation (2026-08-05); nothing else in plan.md was
+  touched, and the rule stands for future sessions.
+- **Wording note (owner catch):** the draft said "Phases 1–3 are
+  complete." Wrong against plan.md's own definition — plan.md's Phase 3
+  includes the store listing, screenshots, and privacy write-up, which
+  are queued as roadmap chunks 7–10 (the 2026-08-05 "Phase 3 complete"
+  declaration earlier in this ledger was scoped by the owner to in-page
+  UI + wording only). The applied note says Phase 3's in-page work
+  shipped and the rest is queued.
