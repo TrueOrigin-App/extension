@@ -152,6 +152,13 @@ async function analyzeImage(image: HTMLImageElement): Promise<void> {
     return;
   }
 
+  // Intent-gated "checking" indicator, started only now — after the
+  // settle wait and every skip gate above — so it can never claim a
+  // check on an image that will produce no verdict (no URL, broken
+  // render, too small). renderBadge hands it off to the verdict badge;
+  // the scheduler callback's finally covers every failure path.
+  markPending(image);
+
   // data: URLs skip the URL cache: the URL *is* the payload, so a Map key
   // would retain the whole string (the worker's content-hash layer dedupes
   // their analysis anyway). blob: URLs are short opaque handles to content
@@ -188,10 +195,6 @@ const scheduler = new ScanScheduler<HTMLImageElement>({
   maxConcurrent: MAX_CONCURRENT_ANALYSES,
   analyze: async (image) => {
     const generation = generationOf(image);
-    // Intent-gated "checking" indicator for the whole analysis window
-    // (settle wait + acquisition + WASM). renderBadge hands it off to the
-    // verdict badge; the finally covers every failure path.
-    markPending(image);
     try {
       await analyzeImage(image);
     } catch (thrown) {
@@ -210,7 +213,13 @@ const scheduler = new ScanScheduler<HTMLImageElement>({
       failedAttempts.set(image, attempts);
       if (attempts < MAX_ANALYSIS_ATTEMPTS) scheduler.reset(image);
     } finally {
-      clearPending(image);
+      // Generation-guarded like every other side effect: analysis runs
+      // overlap (ScanScheduler.reset leaves in-flight runs going), so a
+      // stale run settling here must not destroy the pending indicator —
+      // and its intent listeners — of the fresh cycle that replaced it.
+      // Every generation bump clears pending itself (invalidateScan via
+      // removeBadgeFor, untrack directly), so nothing leaks.
+      if (generationOf(image) === generation) clearPending(image);
     }
   },
 });
@@ -248,6 +257,10 @@ function track(image: HTMLImageElement): void {
 function untrack(image: HTMLImageElement): void {
   generations.set(image, generationOf(image) + 1);
   failedAttempts.delete(image);
+  // The generation bump above stops the in-flight run's finally from
+  // clearing pending state, so the removal path must do it — a removed
+  // image's "checking" chip and intent listeners die with the image.
+  clearPending(image);
   scheduler.reset(image);
   intersectionObserver.unobserve(image);
   resizeObserver.unobserve(image);

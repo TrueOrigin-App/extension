@@ -17,13 +17,43 @@
 // - No qualifying signal maps to "unknown". Never to "not AI" (§8,
 //   constraint 1).
 
-import type { AggregateEvidence, SignalResult, Verdict } from "./types";
+import type {
+  AggregateEvidence,
+  SignalResult,
+  Verdict,
+  VerdictId,
+} from "./types";
 
 /** Minimum confidence for a probabilistic "ai-indicated" signal to produce
  * an "ai-likely" verdict. Provisional until a real probabilistic provider
  * exists (Phase 4) — see DECISIONS.md. Below-threshold signals still appear
  * in `Verdict.signals`, just not in `basis`. */
 export const AI_LIKELY_MIN_CONFIDENCE = 0.7;
+
+/** The verdict class a single signal's evidence supports on its own —
+ * what a UI surface should claim when rendering that one signal in
+ * isolation (the popover's per-signal rings). Lives beside mapVerdict so
+ * the finding→class mapping and its threshold rule stay in one module: a
+ * below-threshold "ai-indicated" signal supports nothing beyond
+ * "unknown" (the same AI_LIKELY_MIN_CONFIDENCE rule mapVerdict applies),
+ * and "none" maps to "unknown", never to a "not AI" of any kind (§8,
+ * constraint 1). */
+export function verdictClassForSignal(
+  signal: Pick<SignalResult, "finding" | "confidence">,
+): VerdictId {
+  switch (signal.finding) {
+    case "ai-declared":
+      return "ai-declared";
+    case "human-provenance":
+      return "human-verified";
+    case "ai-indicated":
+      return signal.confidence >= AI_LIKELY_MIN_CONFIDENCE
+        ? "ai-likely"
+        : "unknown";
+    case "none":
+      return "unknown";
+  }
+}
 
 export function mapVerdict(evidence: AggregateEvidence): Verdict {
   const { signals, failures } = evidence;

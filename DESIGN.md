@@ -106,7 +106,9 @@ the shadow root's first node (`DIRECTION_CONTRACT` in
 - Dark translucent glass, self-grounded over arbitrary host imagery
 - One functional hue per verdict class; state never carried by color alone
 - Discrete honest ring bands — geometry never fakes precision
-- System type only (`ui-rounded` first); zero web fonts touch host pages
+- System type only (`ui-rounded` first); zero web fonts touch host pages.
+  Caveat (2026-08-05 review): `ui-rounded` is a Safari-only generic —
+  Chrome, the shipping target, falls through to the plain system face
 - One authored motion moment: the arc sweeping to its honest band
 - Guest posture: the host page's content always outranks our chrome
 
@@ -168,10 +170,18 @@ alarm is a product principle, enforced chromatically.
 **Body Font:** `ui-rounded` (with `-apple-system, system-ui, sans-serif` fallbacks)
 **Label/Mono Font:** same stack, weight 600
 
-**Character:** One rounded system stack for everything, at complication
-sizes. Friendly geometry without a licensed face — and, deliberately, zero
-web-font loads into host pages (a privacy and guest-posture commitment, not
-a shortcut).
+**Character:** One rounded-first system stack for everything, at
+complication sizes. Friendly geometry without a licensed face — and,
+deliberately, zero web-font loads into host pages (a privacy and
+guest-posture commitment, not a shortcut).
+
+**Caveat (2026-08-05 post-ship review):** `ui-rounded` resolves only in
+Safari; no Chromium version supports it, so in Chrome — the extension's
+only shipping target — every surface renders the plain system face
+(SF/Segoe/Roboto). The rounded register is an aspiration the stack is
+ready for, not what ships today; the stack stays because unknown family
+names cost nothing and Safari support arrives for free if the surface
+ever runs there.
 
 ### Hierarchy
 

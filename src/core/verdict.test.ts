@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, SignalResult } from "./types";
 import { VERDICT_IDS } from "./types";
-import { AI_LIKELY_MIN_CONFIDENCE, mapVerdict } from "./verdict";
+import {
+  AI_LIKELY_MIN_CONFIDENCE,
+  mapVerdict,
+  verdictClassForSignal,
+} from "./verdict";
 
 function signal(
   finding: Finding,
@@ -143,5 +147,32 @@ describe("mapVerdict", () => {
       expect(verdict.verdict).toBe("ai-likely");
       expect(verdict.basis).toEqual([strongA, strongB]);
     });
+  });
+});
+
+// Single-signal classing for UI surfaces (the popover's per-signal
+// rings): must never claim more than mapVerdict would grant the same
+// signal — the taxonomy mapping lives here, next to the mapper.
+describe("verdictClassForSignal", () => {
+  it("maps each finding to the class its evidence supports alone", () => {
+    expect(verdictClassForSignal(signal("ai-declared"))).toBe("ai-declared");
+    expect(verdictClassForSignal(signal("human-provenance"))).toBe(
+      "human-verified",
+    );
+    expect(verdictClassForSignal(signal("ai-indicated", 0.9))).toBe(
+      "ai-likely",
+    );
+    expect(verdictClassForSignal(signal("none"))).toBe("unknown");
+  });
+
+  it("applies mapVerdict's threshold to probabilistic signals", () => {
+    expect(
+      verdictClassForSignal(signal("ai-indicated", AI_LIKELY_MIN_CONFIDENCE)),
+    ).toBe("ai-likely");
+    expect(
+      verdictClassForSignal(
+        signal("ai-indicated", AI_LIKELY_MIN_CONFIDENCE - 0.01),
+      ),
+    ).toBe("unknown");
   });
 });

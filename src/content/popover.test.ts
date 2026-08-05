@@ -156,4 +156,21 @@ describe("buildPopoverContent", () => {
     );
     expect(rings).toEqual(["ai-declared", "unknown"]);
   });
+
+  it("caps a below-threshold probabilistic signal's ring at unknown", () => {
+    // The ring must not claim more than mapVerdict grants the signal: a
+    // sub-threshold ai-indicated signal is excluded from any verdict
+    // basis (AI_LIKELY_MIN_CONFIDENCE), so drawing it the near-closed
+    // "Likely AI" band would be a visual claim exceeding the evidence.
+    const weak: SignalResult = {
+      providerId: "future-watermark",
+      finding: "ai-indicated",
+      confidence: 0.4,
+      detail: {},
+    };
+    const container = render(make("unknown", [weak]));
+    expect(
+      container.querySelector(".signal .ring")?.getAttribute("data-ring"),
+    ).toBe("unknown");
+  });
 });

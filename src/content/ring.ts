@@ -14,7 +14,7 @@
 // are the color-independent signals, and hues are assigned in badge.ts's
 // stylesheet, keyed by data-ring on the <svg>.
 
-import type { Finding, VerdictId } from "../core/types";
+import type { VerdictId } from "../core/types";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -65,20 +65,9 @@ export function ringStateForVerdict(verdict: VerdictId): RingState {
   }
 }
 
-/** A single signal's ring, for the popover's evidence rows: same bands,
- * keyed by what that one provider found rather than the aggregate. */
-export function ringStateForFinding(finding: Finding): RingState {
-  switch (finding) {
-    case "ai-declared":
-      return ringStateForVerdict("ai-declared");
-    case "ai-indicated":
-      return ringStateForVerdict("ai-likely");
-    case "human-provenance":
-      return ringStateForVerdict("human-verified");
-    case "none":
-      return ringStateForVerdict("unknown");
-  }
-}
+// (Per-signal rings are keyed by core's verdictClassForSignal — see
+// popover.ts — so the finding→class mapping and its confidence threshold
+// live in exactly one module, next to mapVerdict.)
 
 function svgElement<K extends string>(name: K): SVGElement {
   return document.createElementNS(SVG_NS, name);

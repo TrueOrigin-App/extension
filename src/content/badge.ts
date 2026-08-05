@@ -76,7 +76,9 @@ const CONTAINED_EVENT_TYPES = [
 // 2026-08-05; surface brief at .impeccable/surfaces/src-content-badge-ts.md).
 // Dark-glass chip and panel, one functional hue per verdict class (never
 // color alone: band + glyph carry the state), ui-rounded-first system type
-// so no web font ever loads into a host page. Verdict hues hold ≥3:1
+// so no web font ever loads into a host page (ui-rounded is Safari-only —
+// Chrome renders the plain system face; caveat recorded in DESIGN.md and
+// DECISIONS.md, 2026-08-05). Verdict hues hold ≥3:1
 // non-text contrast against the chip's worst-case (white-page) backdrop;
 // the focus ring pairs a light outline with a dark halo so it reads over
 // arbitrary imagery.
@@ -102,7 +104,7 @@ const BADGE_STYLE = `
     padding: 2px;
     border: 0;
     border-radius: 999px;
-    background: rgba(15, 16, 20, 0.82);
+    background: rgba(15, 16, 20, 0.92);
     color: #f5f6f7;
     font:
       600 12px/1 ui-rounded,
@@ -111,8 +113,6 @@ const BADGE_STYLE = `
     box-shadow:
       0 1px 4px rgba(0, 0, 0, 0.35),
       inset 0 0 0 0.5px rgba(255, 255, 255, 0.22);
-    backdrop-filter: blur(10px) saturate(140%);
-    -webkit-backdrop-filter: blur(10px) saturate(140%);
     pointer-events: auto;
     cursor: pointer;
     user-select: none;
@@ -120,6 +120,17 @@ const BADGE_STYLE = `
       opacity 0.25s ease,
       background-color 0.2s ease,
       transform 0.12s ease;
+  }
+  /* No resting backdrop-filter on chips: strong-verdict badges are
+     always visible, and a live blur readback per chip per scrolled
+     frame drops frames on image-heavy pages. The glass moment happens
+     up close — hover, focus, open panel — one badge at a time; the
+     resting chip grounds itself with higher alpha instead. */
+  .badge:hover,
+  .badge:focus-visible,
+  .badge[aria-expanded="true"] {
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
   }
   .badge:hover {
     background: rgba(30, 32, 40, 0.88);
@@ -241,10 +252,15 @@ const BADGE_STYLE = `
   .popover .verdict .ring-arc {
     animation: trueorigin-sweep 0.64s cubic-bezier(0.22, 1, 0.36, 1);
   }
-  /* Flex column so only the evidence region scrolls (reviewer fix 1):
+  /* Flex column so the evidence region scrolls first (reviewer fix 1):
      the verdict, disclosure, and the privacy line — the trust claim the
-     contract puts on the card — stay visible at every height, and no
-     line ever half-clips at an invisible scroll edge. */
+     contract puts on the card — stay visible at every reasonable height,
+     and no line ever half-clips at an invisible scroll edge. The panel
+     itself stays a scroll container as the fallback layer: when even the
+     flex-none stack outgrows the height cap (short viewports, degraded
+     notice), the whole panel scrolls — nothing ever paints past the card
+     unreachably — and wheel input over any region is consumed here
+     instead of chaining to the page under an open dialog. */
   .popover {
     all: initial;
     direction: ltr;
@@ -267,6 +283,8 @@ const BADGE_STYLE = `
       inset 0 0 0 0.5px rgba(255, 255, 255, 0.18);
     backdrop-filter: blur(16px) saturate(140%);
     -webkit-backdrop-filter: blur(16px) saturate(140%);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     pointer-events: auto;
     animation: trueorigin-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   }
@@ -281,7 +299,11 @@ const BADGE_STYLE = `
   }
   .popover > .evidence {
     flex: 0 1 auto;
-    min-height: 0;
+    /* A floor, not 0: in the borderline band the flex algorithm would
+       squeeze an expanded evidence region into a useless sliver — the
+       disclosure would appear to do nothing. Below the floor the whole
+       panel scrolls instead (the .popover fallback above). */
+    min-height: 64px;
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -289,15 +311,18 @@ const BADGE_STYLE = `
      truncation finding demands must always be visible. Chrome-only
      surface, so the webkit pseudos are the mechanism; setting the
      standard scrollbar-width property would disable them. */
+  .popover::-webkit-scrollbar,
   .popover > .evidence::-webkit-scrollbar {
     width: 8px;
   }
+  .popover::-webkit-scrollbar-thumb,
   .popover > .evidence::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 999px;
     background: rgba(245, 246, 247, 0.3);
     background-clip: content-box;
   }
+  .popover::-webkit-scrollbar-track,
   .popover > .evidence::-webkit-scrollbar-track {
     background: transparent;
   }
@@ -436,6 +461,13 @@ const BADGE_STYLE = `
 
 let shadowRoot: ShadowRoot | null = null;
 
+// Persistent offscreen live region for the pending chip. A live region
+// only announces mutations made while it is already in the accessibility
+// tree — the chip itself enters the DOM fully formed (aria-label only,
+// aria-hidden ring), so it can never speak. This region takes the text
+// instead: set on reveal, cleared when the last chip goes.
+let statusRegion: HTMLDivElement | null = null;
+
 // One badge per image, so a re-analysis (src swap) replaces rather than
 // stacks. Each entry remembers the URL its verdict describes — the
 // invalidation key syncBadges checks against the image's live source — and
@@ -493,6 +525,14 @@ function ensureHost(): ShadowRoot {
   const style = document.createElement("style");
   style.textContent = BADGE_STYLE;
   shadowRoot.append(document.createComment(DIRECTION_CONTRACT), style);
+  // Visually hidden, never display:none (a none'd live region is not
+  // announced). Lives in the shadow root so removeAllBadges takes it too.
+  statusRegion = document.createElement("div");
+  statusRegion.setAttribute("role", "status");
+  statusRegion.style.cssText =
+    "position: absolute; width: 1px; height: 1px; overflow: hidden; " +
+    "clip-path: inset(50%); white-space: nowrap;";
+  shadowRoot.append(statusRegion);
   // If the page tore out the previous host, every live badge is still
   // parented to its detached shadow root — adopt them, or they would keep
   // updating invisibly forever. The open popover rides along, keeping its
@@ -555,7 +595,14 @@ interface PopoverPlacement {
  * viewport horizontally — and flipped above the badge when the space
  * below is short and above fits (a panel opening entirely below the fold
  * reads as a dead click). When neither side fits, below wins: the panel
- * itself is height-capped and its evidence region scrolls. */
+ * itself is height-capped and scrolls.
+ *
+ * The side is decided once, at the panel's first placement, and held for
+ * its open lifetime (data-side): re-deciding on every sync tick would
+ * teleport an open panel across its badge the moment scrolling crosses
+ * the fits-below threshold, yanking the text out from under the reader —
+ * scrolling a locked panel toward the fold just scrolls it away, like
+ * any page content. */
 function placePopover(popover: HTMLDivElement, place: PopoverPlacement): void {
   const {
     rect,
@@ -571,10 +618,15 @@ function placePopover(popover: HTMLDivElement, place: PopoverPlacement): void {
   const maxLeft = scrollX + viewportWidth - popoverWidth - 8;
   popover.style.left = `${Math.max(scrollX + 8, Math.min(ideal, maxLeft))}px`;
   const belowTop = rect.top + 8 + badgeHeight + 6;
-  const fitsBelow = belowTop + popoverHeight <= viewportHeight - 8;
   const aboveTop = rect.top + 8 - 6 - popoverHeight;
-  const fitsAbove = aboveTop >= 8;
-  const top = fitsBelow || !fitsAbove ? belowTop : aboveTop;
+  let side = popover.dataset["side"];
+  if (side !== "below" && side !== "above") {
+    const fitsBelow = belowTop + popoverHeight <= viewportHeight - 8;
+    const fitsAbove = aboveTop >= 8;
+    side = fitsBelow || !fitsAbove ? "below" : "above";
+    popover.dataset["side"] = side;
+  }
+  const top = side === "below" ? belowTop : aboveTop;
   popover.style.top = `${top + scrollY}px`;
 }
 
@@ -696,6 +748,45 @@ function openPopoverFor(image: HTMLImageElement): void {
   );
   syncAltDescription(element, image);
   element.append(buildPopoverContent(entry.verdict));
+  // Entrance motion plays once per element: re-insertion during a host
+  // rebuild restarts CSS animations, and an adopted panel must not
+  // re-pop (nor its headline arc re-sweep) mid-read. A rebuilt content
+  // fragment brings fresh arc elements, so a verdict change still sweeps.
+  element.addEventListener("animationend", (event) => {
+    if (event.animationName === "trueorigin-pop") {
+      element.style.animation = "none";
+    } else if (
+      event.animationName === "trueorigin-sweep" &&
+      event.target instanceof SVGElement
+    ) {
+      event.target.style.animation = "none";
+    }
+  });
+  // Wheel over the open panel must never scroll the page beneath it.
+  // CSS alone cannot guarantee that: overscroll-behavior engages only
+  // where scrollable overflow exists, so a panel whose evidence region
+  // absorbed the excess has no containment layer under the pointer at
+  // all. Consume the event unconditionally and route the delta to the
+  // innermost scrollable region under the pointer, the panel itself
+  // included. (A non-passive listener's preventDefault is binding for
+  // real wheel input; automation scroll gestures drive the viewport at
+  // the compositor level and bypass wheel dispatch entirely, so they
+  // can neither exercise nor falsify this path — 2026-08-05 soak.)
+  element.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      for (const node of event.composedPath()) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node.scrollHeight > node.clientHeight) {
+          node.scrollTop += event.deltaY;
+          break;
+        }
+        if (node === element) break;
+      }
+    },
+    { passive: false },
+  );
   // Inserted right after its badge so keyboard focus flows badge → panel.
   entry.element.after(element);
   entry.element.setAttribute("aria-expanded", "true");
@@ -805,9 +896,13 @@ function scheduleIntentHide(image: HTMLImageElement, entry: BadgeEntry): void {
     if (!entry.gate) return;
     entry.gate.hideTimer = null;
     // Never hide under the reader: an open popover, hover on the badge,
-    // or keyboard focus inside it all hold the reveal.
+    // keyboard focus inside it — or the pointer resting on the image
+    // itself — all hold the reveal. Without the image check, a hide
+    // scheduled by a verdict handoff or a popover close fires under a
+    // stationary pointer, and no boundary event is left to re-reveal.
     if (openPopover?.image === image) return;
     if (entry.element.matches(":hover, :focus-within")) return;
+    if (image.matches(":hover")) return;
     entry.element.dataset["presence"] = "hidden";
   }, INTENT_HIDE_DELAY_MS);
 }
@@ -830,7 +925,16 @@ function syncIntentGate(image: HTMLImageElement, entry: BadgeEntry): void {
   if (entry.gate) return; // Already gated; keep the current visibility.
   const controller = new AbortController();
   entry.gate = { controller, hideTimer: null };
-  entry.element.dataset["presence"] = "hidden";
+  // Initial presence honors the same holds as the hide timer: an
+  // in-place re-render can land on Unknown while this badge's popover is
+  // open or the reader is on it, and hiding then would strand a visible
+  // dialog on an invisible button — or vanish the badge under the cursor
+  // with no boundary event left to re-reveal it.
+  const held =
+    openPopover?.image === image ||
+    entry.element.matches(":hover, :focus-within") ||
+    image.matches(":hover");
+  entry.element.dataset["presence"] = held ? "shown" : "hidden";
   const { signal } = controller;
   const reveal = (): void => revealIntentBadge(entry);
   const hide = (): void => scheduleIntentHide(image, entry);
@@ -863,6 +967,22 @@ interface PendingEntry {
 }
 const pending = new Map<HTMLImageElement, PendingEntry>();
 
+function anyPendingChipVisible(): boolean {
+  for (const entry of pending.values()) {
+    if (entry.element) return true;
+  }
+  return false;
+}
+
+/** Removes a pending entry's chip from screen (the entry itself lives
+ * until clearPending). Clears the live region once no chip remains. */
+function removePendingChip(entry: PendingEntry): void {
+  if (!entry.element) return;
+  entry.element.remove();
+  entry.element = null;
+  if (statusRegion && !anyPendingChipVisible()) statusRegion.textContent = "";
+}
+
 function revealPendingChip(image: HTMLImageElement, entry: PendingEntry): void {
   if (entry.hideTimer != null) {
     clearTimeout(entry.hideTimer);
@@ -870,6 +990,10 @@ function revealPendingChip(image: HTMLImageElement, entry: PendingEntry): void {
   }
   const rect = image.getBoundingClientRect();
   if (isCollapsed(rect)) return;
+  // ensureHost even when the chip already exists: a page that tore out
+  // the host would otherwise leave it stranded in the detached shadow
+  // root (the rebuild's adoption loop re-parents it).
+  const root = ensureHost();
   if (!entry.element) {
     const chip = document.createElement("div");
     chip.className = "badge pending";
@@ -877,10 +1001,9 @@ function revealPendingChip(image: HTMLImageElement, entry: PendingEntry): void {
     chip.setAttribute("aria-label", CHECKING_LABEL);
     chip.append(buildRing(ringStateForChecking(), "ring"));
     entry.element = chip;
-    ensureHost().append(chip);
+    root.append(chip);
+    if (statusRegion) statusRegion.textContent = CHECKING_LABEL;
   }
-  // Repositioned on every intent event rather than joining the sync pass:
-  // one transient element, alive only under the pointer.
   positionAt(entry.element, rect, window.scrollX, window.scrollY);
 }
 
@@ -888,8 +1011,7 @@ function schedulePendingHide(entry: PendingEntry): void {
   if (entry.hideTimer != null) clearTimeout(entry.hideTimer);
   entry.hideTimer = window.setTimeout(() => {
     entry.hideTimer = null;
-    entry.element?.remove();
-    entry.element = null;
+    removePendingChip(entry);
   }, INTENT_HIDE_DELAY_MS);
 }
 
@@ -919,8 +1041,7 @@ export function clearPending(image: HTMLImageElement): boolean {
   if (entry.hideTimer != null) clearTimeout(entry.hideTimer);
   entry.controller.abort();
   const wasVisible = entry.element !== null;
-  entry.element?.remove();
-  entry.element = null;
+  removePendingChip(entry);
   return wasVisible;
 }
 
@@ -950,6 +1071,16 @@ export function renderBadge(
     // Containment at the host boundary (ensureHost) keeps this and every
     // other overlay event from the page's own handlers.
     element.addEventListener("click", () => togglePopover(image));
+    // The sweep class comes off once its animation finishes: DOM
+    // re-insertion restarts CSS animations, so .enter left in place
+    // would replay every badge's draw-on each time a host rebuild
+    // re-adopts the overlay ("sweep on first paint and on a verdict
+    // change — never on positional re-renders").
+    element.addEventListener("animationend", (event) => {
+      if (event.animationName === "trueorigin-sweep") {
+        element.classList.remove("enter");
+      }
+    });
     const label = document.createElement("span");
     label.className = "label";
     const ring = buildRing(ringStateForVerdict(verdict.verdict), "ring");
@@ -1045,6 +1176,10 @@ export function removeBadgeFor(image: HTMLImageElement): void {
  * layout-affecting events (resize, scroll, mutations, subresource loads).
  * The open popover moves with its badge and closes with it; a popover over
  * a hidden (collapsed-rect) image closes rather than floating over nothing.
+ * Visible pending chips ride the same pass: layout shifts move and
+ * collapse them like badges, and a chip whose image left the document is
+ * taken off screen here rather than floating over reflowed content until
+ * its analysis settles.
  *
  * All layout reads complete before the first style write: interleaving
  * them forces a synchronous layout flush per badge instead of one.
@@ -1060,7 +1195,7 @@ export function syncBadges(
   onImageRemoved?: (image: HTMLImageElement) => void,
   onImageStale?: (image: HTMLImageElement) => void,
 ): void {
-  if (badges.size === 0) return;
+  if (badges.size === 0 && !anyPendingChipVisible()) return;
   // A page removing the host is itself a DOM mutation, so sync runs right
   // after — rebuilding here (which re-adopts the badges) restores the
   // overlay on the next layout event instead of the next fresh verdict.
@@ -1093,6 +1228,16 @@ export function syncBadges(
       }
     }
   }
+  const pendingMoves: Array<[HTMLElement, DOMRect]> = [];
+  const pendingGone: PendingEntry[] = [];
+  for (const [image, entry] of pending) {
+    if (!entry.element) continue;
+    if (image.isConnected) {
+      pendingMoves.push([entry.element, image.getBoundingClientRect()]);
+    } else {
+      pendingGone.push(entry);
+    }
+  }
   const { scrollX, scrollY } = window;
   // Still the read phase: after the writes below, these reads would force
   // a synchronous reflow on every popover-open sync.
@@ -1101,6 +1246,13 @@ export function syncBadges(
 
   for (const [element, rect] of moves) {
     positionAt(element, rect, scrollX, scrollY);
+  }
+  // positionAt hides a chip whose image collapsed, same rule as badges.
+  for (const [element, rect] of pendingMoves) {
+    positionAt(element, rect, scrollX, scrollY);
+  }
+  for (const entry of pendingGone) {
+    removePendingChip(entry);
   }
   if (openPopover && popoverMove) {
     if (isCollapsed(popoverMove.rect)) {
@@ -1133,7 +1285,20 @@ export function syncBadges(
 export function removeAllBadges(): void {
   for (const image of Array.from(pending.keys())) clearPending(image);
   closePopover();
+  // Tear down every intent gate: its listeners live on the page's own
+  // <img> elements, so removing the host alone would leave them firing
+  // reveals against detached badges for the page's lifetime — and a
+  // later re-enable would stack a second listener generation (§8: the
+  // overlay must be removable).
+  for (const entry of badges.values()) {
+    if (entry.gate) {
+      cancelHide(entry);
+      entry.gate.controller.abort();
+      entry.gate = null;
+    }
+  }
   shadowRoot?.host.remove();
   shadowRoot = null;
+  statusRegion = null;
   badges.clear();
 }

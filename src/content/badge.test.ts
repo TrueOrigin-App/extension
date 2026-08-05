@@ -419,6 +419,24 @@ describe("popover", () => {
     }
   });
 
+  it("consumes wheel events over the panel instead of scrolling the page", () => {
+    // overscroll-behavior only engages where scrollable overflow exists
+    // (verified live: the page scrolled under the open dialog), so the
+    // panel consumes wheel unconditionally and routes the delta itself.
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+
+    const wheel = new WheelEvent("wheel", {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      deltaY: 120,
+    });
+    popoverElements()[0]!.querySelector(".explain")!.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+  });
+
   it("closes when its image's badge is removed", () => {
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("ai-declared"), image.src);
@@ -651,6 +669,57 @@ describe("intent-gated presence", () => {
     renderBadge(image, wire("unknown"), image.src);
     expect(badge.dataset["presence"]).toBe("hidden");
   });
+
+  it("keeps an in-place downgrade to Unknown visible while its popover is open", () => {
+    // Gate creation honors the same holds as the hide timer: hiding here
+    // would strand a visible dialog on an invisible aria-expanded button.
+    const image = makeImage("https://example.com/f.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    badgeElements()[0]!.click();
+    renderBadge(image, wire("unknown"), image.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+    expect(popoverElements()).toHaveLength(1);
+  });
+
+  it("holds the reveal under a pointer resting on the image, not just the badge", () => {
+    // A hide scheduled by the pending handoff (or a popover close) fires
+    // while the pointer sits mid-image: without the image's own hover in
+    // the guard, the badge blinks out with no boundary event left to
+    // re-reveal it. jsdom has no :hover state — the mock stands in for
+    // the stationary pointer.
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/rest.jpg");
+    markPending(image);
+    image.dispatchEvent(new Event("pointermove"));
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(badge.dataset["presence"]).toBe("shown");
+
+    const matches = vi.spyOn(image, "matches");
+    matches.mockReturnValue(true);
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("shown");
+
+    // The pointer finally leaves: the ordinary boundary hide applies.
+    matches.mockReturnValue(false);
+    image.dispatchEvent(new Event("pointerleave"));
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
+  });
+
+  it("removeAllBadges tears down the intent-gate listeners on the page's images", () => {
+    const image = makeImage("https://example.com/gone.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    removeAllBadges();
+    // The reveal listeners live on the page's own <img> (§8: the overlay
+    // must be removable); without the abort they would keep firing
+    // against the detached badge for the page's lifetime.
+    image.dispatchEvent(new Event("pointerenter"));
+    image.dispatchEvent(new Event("pointermove"));
+    expect(badge.dataset["presence"]).toBe("hidden");
+  });
 });
 
 // Finish-review fix 2: the intent-gated in-flight indicator — a tracing
@@ -683,6 +752,41 @@ describe("pending indicator", () => {
     expect(overlayRoot?.querySelector(".badge.pending")).not.toBeNull();
     clearPending(image);
     expect(overlayRoot?.querySelector(".badge.pending")).toBeNull();
+  });
+
+  it("joins the sync pass: chips reposition and reap like badges", () => {
+    const image = makeImage("https://example.com/slow.jpg");
+    markPending(image);
+    image.dispatchEvent(new Event("pointermove"));
+    const chip = overlayRoot?.querySelector<HTMLElement>(".badge.pending");
+    expect(chip?.style.left).toBe("18px");
+
+    // Layout shifted under the chip (an ad loaded above): the sync pass
+    // must move it — a stationary pointer fires no further intent event.
+    vi.spyOn(image, "getBoundingClientRect").mockReturnValue(
+      asRect({ ...RECT, left: 50 }),
+    );
+    syncBadges();
+    expect(chip?.style.left).toBe("58px");
+
+    // A virtualized feed removed the image: no pointerleave ever fires on
+    // a detached element, so the sync pass takes the chip off screen.
+    image.remove();
+    syncBadges();
+    expect(overlayRoot?.querySelector(".badge.pending")).toBeNull();
+  });
+
+  it("announces the in-flight check through the persistent live region", () => {
+    // The chip itself enters the DOM fully formed (aria-label only), so
+    // its own role=status can never announce; the persistent offscreen
+    // region takes the text instead.
+    const image = makeImage("https://example.com/slow.jpg");
+    markPending(image);
+    image.dispatchEvent(new Event("pointermove"));
+    const region = overlayRoot?.querySelector('[role="status"]:not(.badge)');
+    expect(region?.textContent).toBe("Checking this image…");
+    clearPending(image);
+    expect(region?.textContent).toBe("");
   });
 });
 
@@ -718,5 +822,20 @@ describe("evidence ring", () => {
       "true",
     );
     expect(badge.textContent).toBe("Made with AI");
+  });
+
+  it("drops the sweep class when its animation ends (host-rebuild replay guard)", () => {
+    // DOM re-insertion restarts CSS animations: .enter left in place
+    // would replay every badge's draw-on each time a host rebuild
+    // re-adopts the overlay.
+    const image = makeImage("https://example.com/c.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(badge.classList.contains("enter")).toBe(true);
+
+    const end = new Event("animationend", { bubbles: true });
+    Object.assign(end, { animationName: "trueorigin-sweep" });
+    badge.dispatchEvent(end);
+    expect(badge.classList.contains("enter")).toBe(false);
   });
 });

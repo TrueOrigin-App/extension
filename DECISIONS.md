@@ -2523,3 +2523,119 @@ Phase 3 as scoped by the owner (in-page UI + wording; store assets
 deferred to a later effort) is complete: visual world committed and
 recorded (DESIGN.md), badge/popover shipped through the finish review
 ("ship"), wording finalized.
+
+## 2026-08-05 — Post-ship code review of PR #8: 15 findings fixed
+
+A full review pass over the Phase 3 branch surfaced 15 verified findings,
+all fixed in one session. The cluster: the new pending-indicator and
+intent-gate machinery lived outside the lifecycle invariants the badge
+pipeline enforces. Free choices made while fixing (alternatives noted):
+
+### Pending/intent-gate lifecycle
+
+- `analyze()`'s `finally` now clears pending state only when the run's
+  generation is still current — overlapping runs are a supported state
+  (`ScanScheduler.reset` leaves in-flight runs going), and a stale run
+  settling must not destroy the fresh cycle's indicator. Every
+  generation-bump path clears pending itself (`invalidateScan` via
+  `removeBadgeFor`; `untrack` now directly), so nothing leaks.
+- `markPending` moved after the settle wait and every skip gate (no URL,
+  broken render, `MIN_IMAGE_DIMENSION_PX`): the chip must never claim a
+  check on an image that can produce no verdict. Rejected: keeping it at
+  the top of the analyze callback with per-gate clears — one placement
+  after the gates is strictly simpler.
+- Visible pending chips joined the `syncBadges` pass (reposition on
+  layout shift, hide on collapse, reap on disconnect), and
+  `revealPendingChip` re-runs `ensureHost` so a host teardown can no
+  longer strand a chip in a detached shadow root. Rejected: promoting
+  "checking" to a full `BadgeEntry` state — a bigger refactor with the
+  same observable behavior; reconsider if the pending path grows again.
+- The intent-hide timer guard now also holds while the _image_ is
+  hovered (`image.matches(":hover")`), not just the badge — a verdict
+  handoff or popover close under a stationary pointer no longer blinks
+  the badge out. Same holds applied to gate creation (`syncIntentGate`),
+  so an in-place downgrade to Unknown under an open popover stays shown.
+- `removeAllBadges` aborts every gate controller and hide timer —
+  listeners live on the page's own `<img>` elements, so host removal
+  alone left them firing forever (§8 removability).
+
+### Popover
+
+- `.popover` is a scroll container again (`overflow-y: auto` +
+  `overscroll-behavior: contain`) _as a fallback layer_ under the
+  evidence-only scroll: when even the flex-none stack outgrows the
+  height cap (short viewports, degraded notice), the panel scrolls
+  instead of painting past the card unreachably. `.evidence` got a 64px
+  min-height floor so the borderline band can't squeeze an expanded
+  disclosure into a sliver. Rejected: reverting to whole-panel-only
+  scroll (loses the always-visible privacy line, reviewer fix 1).
+- Wheel containment is JavaScript, not CSS: `overscroll-behavior`
+  engages only where scrollable overflow exists (per spec), so a panel
+  whose evidence region absorbed the excess has no containment layer
+  under the pointer at all. The panel now consumes wheel events
+  unconditionally (non-passive `preventDefault`, binding for real wheel
+  input) and routes the delta to the innermost scrollable region under
+  the pointer (evidence, else the panel itself). Deliberate behavior
+  change: wheel over a short, uncapped panel scrolls nothing rather
+  than the page — a dialog under the pointer owns the wheel. Soak
+  caveat (2026-08-05): the browser-automation scroll action drives the
+  viewport at the compositor level regardless of pointer target — it
+  bypasses wheel dispatch, so it can neither exercise nor falsify this
+  path. Earlier same-day "page scrolled under the dialog" readings were
+  this artifact (the review's "empirically verified" chaining claim
+  likely was too). What is verified: delta routing live (wheel bursts
+  scrolled the evidence to its limit), preventDefault via the jsdom
+  test, and panel-internal scrolling via the live keyboard-scroll check
+  (privacy line reached, page scrollY unchanged), and the owner's
+  manual trackpad pass (2026-08-05): wheel over the open panel leaves
+  the page still.
+- The below/above flip side is decided once at first placement and held
+  for the panel's open lifetime (`data-side`). Rejected: threshold
+  hysteresis — decide-once is simpler and matches the old always-below
+  stability.
+- Entrance motion plays once per element: badges drop `.enter` on
+  `animationend`, the panel neutralizes `trueorigin-pop` (and its
+  headline arc's sweep) after they run — host-rebuild re-adoption no
+  longer replays animations ("never on positional re-renders").
+
+### Accessibility, performance, wire hardening
+
+- A persistent visually-hidden `role=status` region in the shadow root
+  announces "Checking this image…" when a chip first reveals (cleared
+  when the last chip goes). The chip keeps its own `role`/`aria-label`
+  for tree/touch discovery, but a live region only announces mutations
+  made while it's in the tree — the chip enters fully formed and could
+  never speak.
+- Chips lost their resting `backdrop-filter` (a live blur readback per
+  chip per scrolled frame on image-heavy pages); base alpha raised
+  0.82 → 0.92, glass now applied on hover/focus/expanded only. The
+  popover keeps full glass — one panel at a time.
+- `isWireVerdict` now validates each signal's `finding` (∈ FINDINGS) and
+  `confidence` (number): badge click keys the per-signal ring off both,
+  and an out-of-union finding would throw in the click handler the
+  guard's contract promises to prevent.
+- New `verdictClassForSignal` in core/verdict.ts (beside `mapVerdict`)
+  is the one finding→verdict-class mapping; it honors
+  `AI_LIKELY_MIN_CONFIDENCE`, so a below-threshold probabilistic signal
+  draws the unknown trace, never the near-closed "Likely AI" band.
+  `ring.ts`'s `ringStateForFinding` (which re-encoded the mapping and
+  ignored the threshold) is deleted.
+- Recorded correction: `ui-rounded` is Safari-only — no Chromium version
+  supports it, so Chrome ships the plain system face. The stack stays
+  (unknown families cost nothing; future-proof), but DESIGN.md and the
+  badge.ts comment now carry the caveat instead of claiming the rounded
+  register ships.
+
+236/236 tests pass (11 added), typecheck and Prettier clean.
+
+Post-fix live soak (same day, fixture page + reloaded unpacked build):
+verified working — resting chip solid with glass returning on hover;
+Unknown intent reveal, hover-hold after light dismiss under a resting
+pointer, and the ordinary fade-out; flip side-lock under scroll (panel
+held above its badge after space opened below); evidence min-height
+floor (usable window, no sliver); capped-panel internal scrolling to
+the privacy line via keyboard with page scroll unmoved; host-teardown
+rebuild re-adopting badge, open popover, and disclosure state, shadow
+root still closed. Wheel containment could not be exercised by
+automation (compositor-gesture caveat above) — covered by the jsdom
+preventDefault pin plus the owner's manual trackpad check (passed).
