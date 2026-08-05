@@ -2384,3 +2384,48 @@ opens Phase 3.
   screenshots, and the privacy write-up move to their own later effort
   (plan.md §6 Phase 3 item deferred, not dropped).
 
+## 2026-08-05 — Phase 3 visual world: Evidence Ring (owner-selected via Impeccable)
+
+### The selection process (new-work direction flow)
+
+- Four seeded direction rounds on the Impeccable decision page, three
+  owner re-rolls. Eliminated along the way: field-guide plate, eBoy
+  pixorama, one-bit desktop, WPA park poster (round 1); camera
+  viewfinder, teletext page, zip-tie tag, generative living mark
+  (round 2); annotation pin, Metro type tiles, cyclorama dawn
+  (round 3). Owner steer after round 2: contemporary, no costume,
+  born at badge scale — craft carries the identity, not a metaphor.
+- Round 4 (seed key af6230f8) assigned the owner's grounded candidate
+  "Evidence Ring" — activity-ring / watch-complication grammar — and
+  the owner took it over two challengers (creator-hardware bench,
+  racing livery flood) and the standing category-standard exit.
+
+### The world (recorded in the surface brief for src/content/badge.ts)
+
+- Confidence drawn as geometry: rounded-cap ring on a dark-glass chip;
+  ring closes only for cryptographic verdicts, sits visibly open for
+  "AI — likely", stays a faint open arc for Unknown; traces while
+  checks run. Every signal provider is its own ring in the popover —
+  the aggregation architecture is literally the geometry, and Phase 4
+  providers join without new grammar.
+- Ring fill renders discrete honest bands only, never continuous
+  percentages — partial fill must not fake precision (§2 alignment).
+- Color strategy: Restrained — neutral dark glass + one functional hue
+  per verdict class; never color alone (center glyph carries class, AA).
+- Faces: `ui-rounded`-first system stack — zero web fonts injected into
+  host pages (performance, CSP); rounded system faces carry the
+  friendly register natively.
+- Rejected: all eleven eliminated directions above; light-chip
+  material (badge must self-ground over arbitrary imagery, both
+  themes, like a complication on any watch face).
+
+### Mechanics
+
+- Surface brief written via surface-brief.mjs (primary
+  src/content/badge.ts; related popover.ts, labels.ts, index.ts).
+- DESIGN.md is deliberately not written now — per the skill it is
+  generated at build finish from the built world by the documenter.
+- No image generation in this session's harness: direction cards
+  carried palette chips and prose, no sketches (per skill, that page
+  is complete, not degraded).
+
