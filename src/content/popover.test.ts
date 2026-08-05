@@ -135,4 +135,42 @@ describe("buildPopoverContent", () => {
         "device.",
     );
   });
+
+  it("draws the verdict's ring in the headline row", () => {
+    const container = render(make("ai-likely"));
+    const ring = container.querySelector(".verdict .ring");
+    expect(ring?.getAttribute("data-ring")).toBe("ai-likely");
+    expect(container.querySelector(".verdict .headline")?.textContent).toBe(
+      VERDICT_LABELS["ai-likely"],
+    );
+  });
+
+  it("gives every signal its own ring keyed by that signal's finding", () => {
+    const signals: SignalResult[] = [
+      c2paSignal({}),
+      { providerId: "mock", finding: "none", confidence: 0, detail: {} },
+    ];
+    const container = render(make("ai-declared", signals));
+    const rings = Array.from(container.querySelectorAll(".signal .ring")).map(
+      (ring) => ring.getAttribute("data-ring"),
+    );
+    expect(rings).toEqual(["ai-declared", "unknown"]);
+  });
+
+  it("caps a below-threshold probabilistic signal's ring at unknown", () => {
+    // The ring must not claim more than mapVerdict grants the signal: a
+    // sub-threshold ai-indicated signal is excluded from any verdict
+    // basis (AI_LIKELY_MIN_CONFIDENCE), so drawing it the near-closed
+    // "Likely AI" band would be a visual claim exceeding the evidence.
+    const weak: SignalResult = {
+      providerId: "future-watermark",
+      finding: "ai-indicated",
+      confidence: 0.4,
+      detail: {},
+    };
+    const container = render(make("unknown", [weak]));
+    expect(
+      container.querySelector(".signal .ring")?.getAttribute("data-ring"),
+    ).toBe("unknown");
+  });
 });

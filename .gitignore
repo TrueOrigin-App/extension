@@ -5,3 +5,4 @@ dist/
 .impeccable/config.local.json
 .impeccable/hook.cache.json
 .impeccable/hook.pending.json
+.impeccable/questions/

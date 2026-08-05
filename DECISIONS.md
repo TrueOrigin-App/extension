@@ -2318,3 +2318,324 @@ Honest caveats carried forward, not gates:
 Next per plan.md: merge PR #6 (owner), then the second
 `/impeccable init` pass — the authoritative post-soak re-interview —
 opens Phase 3.
+
+## 2026-08-05 — Second `/impeccable init` pass: post-soak re-interview (Phase 3 opens)
+
+### PRODUCT.md updated (per plan.md §6 Phase 3 timing note; §8 constraint 5)
+
+- The authoritative second init pass ran at the start of Phase 3, via the
+  Impeccable init flow (interview → update, no hand-writing). Owner answers
+  (2026-08-05): Phase 2 declared complete with all soak findings already
+  recorded here; real-browsing verdict mix is almost entirely Unknown; no
+  "Human — verified" fixture was acquired during the soak.
+- What changed in PRODUCT.md: development reality (Phases 1–2 complete, soak
+  done, Phase 3 current); the detail surface is the badge popover, not a
+  browser-action popup; **real-world verdict mix recorded as durable product
+  truth — Unknown is the everyday face of the product, and Phase 3 designs
+  for that reality**; the soak-era Phase 3 docket carried in (stacking over
+  page UI, placeholder copy, the "AI — likely" line covering both evidence
+  classes, the popover "look this image up" candidate); a new capabilities
+  bullet for the two "AI — likely" evidence classes (2026-08-04 owner
+  decision); the queued generator-metadata provider noted under undecided;
+  fixtures updated (`ai_expired.png` added; HV fixture still absent,
+  unit-level only).
+- Confirmed fields — users, positioning, brand commitments, principles, the
+  AA accessibility floor — were not reopened; the interview found no reason.
+
+### Live mode not configured during init (deferred, free choice)
+
+- Init offers live-mode config for runnable web projects. Deferred: the
+  extension's UI is injected by the content script into host pages, not
+  served by the test-page server, so the live-mode file mapping needs the
+  real session flow (live-setup.md) against an actual target. Configure when
+  Phase 3 reaches browser iteration. Existing `.impeccable/config.json`
+  (detector ignores) untouched.
+
+## 2026-08-05 — Phase 3 ask round (owner decisions shaping the design)
+
+### Unknown badges appear on intent only (owner decision)
+
+- With real browsing almost entirely Unknown, the owner chose intent-gated
+  presence: Unknown badges render only when the user shows interest in an
+  image (hover/interaction); the strong verdicts (AI — declared, AI —
+  likely, Human — verified) assert themselves without prompting. An absent
+  badge means "nothing known yet." Acknowledged risk, accepted: the honest
+  default is mostly invisible in passing — the popover and (later) store
+  copy carry the "Unknown is honest" story instead.
+- This is presentation/surfacing, not taxonomy: the Unknown verdict still
+  exists, still computes, still renders on intent. §2 untouched.
+- Implementation lands with the Phase 3 badge rebuild (content-script
+  behavior: intent-gated reveal for Unknown).
+- Rejected: uniform presence for all four states (badge density on every
+  page); "Unknown recedes" middle ground (quiet-but-present marks still
+  accumulate on image-heavy pages).
+
+### Personality lives throughout, badge included (owner decision)
+
+- The badge itself carries the friendly/approachable character (shape,
+  motion, wording) — recognizable and likable at a glance, not a neutral
+  pill with a warm popover behind it. Bounded by the standing
+  anti-references (no alarmism, no enterprise density, no crypto-trust
+  gloss) and the WCAG 2.2 AA floor.
+
+### Phase 3 scope: polish only for now; store work deferred (owner decision)
+
+- This phase covers the in-page UI and verdict wording. Store listing,
+  screenshots, and the privacy write-up move to their own later effort
+  (plan.md §6 Phase 3 item deferred, not dropped).
+
+## 2026-08-05 — Phase 3 visual world: Evidence Ring (owner-selected via Impeccable)
+
+### The selection process (new-work direction flow)
+
+- Four seeded direction rounds on the Impeccable decision page, three
+  owner re-rolls. Eliminated along the way: field-guide plate, eBoy
+  pixorama, one-bit desktop, WPA park poster (round 1); camera
+  viewfinder, teletext page, zip-tie tag, generative living mark
+  (round 2); annotation pin, Metro type tiles, cyclorama dawn
+  (round 3). Owner steer after round 2: contemporary, no costume,
+  born at badge scale — craft carries the identity, not a metaphor.
+- Round 4 (seed key af6230f8) assigned the owner's grounded candidate
+  "Evidence Ring" — activity-ring / watch-complication grammar — and
+  the owner took it over two challengers (creator-hardware bench,
+  racing livery flood) and the standing category-standard exit.
+
+### The world (recorded in the surface brief for src/content/badge.ts)
+
+- Confidence drawn as geometry: rounded-cap ring on a dark-glass chip;
+  ring closes only for cryptographic verdicts, sits visibly open for
+  "AI — likely", stays a faint open arc for Unknown; traces while
+  checks run. Every signal provider is its own ring in the popover —
+  the aggregation architecture is literally the geometry, and Phase 4
+  providers join without new grammar.
+- Ring fill renders discrete honest bands only, never continuous
+  percentages — partial fill must not fake precision (§2 alignment).
+- Color strategy: Restrained — neutral dark glass + one functional hue
+  per verdict class; never color alone (center glyph carries class, AA).
+- Faces: `ui-rounded`-first system stack — zero web fonts injected into
+  host pages (performance, CSP); rounded system faces carry the
+  friendly register natively.
+- Rejected: all eleven eliminated directions above; light-chip
+  material (badge must self-ground over arbitrary imagery, both
+  themes, like a complication on any watch face).
+
+### Mechanics
+
+- Surface brief written via surface-brief.mjs (primary
+  src/content/badge.ts; related popover.ts, labels.ts, index.ts).
+- DESIGN.md is deliberately not written now — per the skill it is
+  generated at build finish from the built world by the documenter.
+- No image generation in this session's harness: direction cards
+  carried palette chips and prose, no sketches (per skill, that page
+  is complete, not degraded).
+
+## 2026-08-05 — Phase 3 badge/popover rebuild shipped (finish review: "ship")
+
+### The build (task #2 of the Phase 3 docket)
+
+- Badge and popover rebuilt in the committed Evidence Ring world:
+  dark-glass 28px chip (ring + authored glyph) that grows into a labeled
+  pill on hover/focus; popover as a glass card with a headline ring,
+  per-signal miniature rings, internally scrolling evidence, and the
+  privacy line always visible. New `src/content/ring.ts` owns all ring
+  geometry: honest bands (closed 100 / open 85 / trace 15) plus a
+  non-evidence `checking` arc; hues key on `data-ring` in one place.
+- Owner behavior decisions implemented: Unknown badges intent-gated
+  (pointerenter/pointermove/focus reveal, graceful re-hide, popover and
+  focus hold the reveal); an intent-gated in-flight "checking" indicator
+  spans the whole analysis window (markPending/clearPending, wired in
+  index.ts, reveal-continuity handoff to a gated Unknown verdict).
+- The direction contract ships as the shadow root's first node
+  (DIRECTION_CONTRACT, seed af6230f8 — grep-able in dist/content.js).
+
+### Bounded verification rounds (Impeccable §7)
+
+- Live inspection found one material gap, fixed and confirmed: scrolling
+  can put an image under a stationary cursor with no boundary event, so
+  pointermove joined pointerenter as a reveal trigger (pinned by test).
+- Finish review ran as a fresh general-purpose subagent following the
+  skill's degraded reviewer charter (this harness ships no
+  impeccable-finish-reviewer agent type — substitution disclosed). Round
+  1: four material fixes (privacy line buried under an invisible scroll
+  edge; missing checking state; popover never flipping above the fold;
+  no pressed state). All four applied; the reviewer's round-2 verdict
+  caught one batch regression (the pending spin ignored
+  prefers-reduced-motion — fixed) and demanded in-extension evidence for
+  two partials. Both captured (the checking state via a
+  dribbled-bytes localhost server holding a real analysis open).
+  Closing disposition, verbatim: **ship** — "remaining: clear".
+- Chrome-only note: `scrollbar-width: thin` disables `::-webkit-scrollbar`
+  styling, and macOS overlay scrollbars hide the native thin thumb — the
+  always-visible evidence-scroll cue therefore uses the webkit pseudos.
+
+### DESIGN.md recorded (documenter pass)
+
+- DESIGN.md + `.impeccable/design.json` written from the built world by
+  the documenter charter (same disclosed substitution). All labels.ts
+  strings recorded as placeholder pending the owner wording pass.
+- DESIGN.md added to `.prettierignore` — same fence as PRODUCT.md
+  (Impeccable-owned file; the formatter stays off it).
+
+### Docket effects
+
+- Google-dropdown stacking (5.5 soak finding): the 28px chip replaces the
+  ~90px text pill, materially shrinking the collision surface; the
+  cover-heuristic / page-DOM-sibling question stays on the docket, not
+  resolved by this task.
+
+## 2026-08-05 — Phase 3 wording pass: verdict copy finalized (owner-selected)
+
+### Badge labels (presentation of §2; the rules and enum values untouched)
+
+- `ai-declared` → **"Made with AI"** (industry-familiar, matches the
+  signed statement's own claim; composites clarified in the popover).
+- `ai-likely` → **"Likely AI"** (leads with the hedge — unmisreadable as
+  certainty, satisfying §2's probabilistic-labeling rule at a glance).
+- `human-verified` → **"Verified photo"** (names exactly the
+  signed-capture evidence class; avoids "Human", which invites
+  over-reading beyond capture provenance).
+- `unknown` → **"Unknown"**, unchanged — the restraint is the brand.
+- Owner selected each from a structured options round. Rejected: keeping
+  the engineering labels at the surface ("declared" is insider
+  vocabulary; the em-dash constructions read as taxonomy, not language);
+  "AI (signed)"; "Probably AI" (weaker than the 0.9-confidence class
+  deserves); "Camera-verified" (more technical than the audience needs).
+
+### Explanations and remaining strings
+
+- ai-likely explanation rewritten to cover both evidence classes
+  honestly (the 2026-08-04 decision's Phase 3 note): "Signs point to
+  this image being AI-made, but the evidence falls short of proof. This
+  is an estimate, not a certainty." — true of a probabilistic detector
+  signal and of an expired, un-timestamped declaration alike.
+- unknown explanation drops the "provenance" jargon: "We couldn't find
+  any usable origin information for this image. Most images carry none —
+  so this says nothing either way."
+- Kept verbatim by owner decision: the ai-declared and human-verified
+  explanations, "How do we know?", the degraded notice, the failure
+  line, and the privacy line. CHECKING_LABEL finalized as shipped.
+- Presenter summaries (providers layer) unchanged — already
+  plain-language and consistent with the new labels.
+- labels.ts comments now mark the wording finalized (edits remain an §8
+  owner ask); three pinned test literals updated; 225/225 pass.
+
+Phase 3 as scoped by the owner (in-page UI + wording; store assets
+deferred to a later effort) is complete: visual world committed and
+recorded (DESIGN.md), badge/popover shipped through the finish review
+("ship"), wording finalized.
+
+## 2026-08-05 — Post-ship code review of PR #8: 15 findings fixed
+
+A full review pass over the Phase 3 branch surfaced 15 verified findings,
+all fixed in one session. The cluster: the new pending-indicator and
+intent-gate machinery lived outside the lifecycle invariants the badge
+pipeline enforces. Free choices made while fixing (alternatives noted):
+
+### Pending/intent-gate lifecycle
+
+- `analyze()`'s `finally` now clears pending state only when the run's
+  generation is still current — overlapping runs are a supported state
+  (`ScanScheduler.reset` leaves in-flight runs going), and a stale run
+  settling must not destroy the fresh cycle's indicator. Every
+  generation-bump path clears pending itself (`invalidateScan` via
+  `removeBadgeFor`; `untrack` now directly), so nothing leaks.
+- `markPending` moved after the settle wait and every skip gate (no URL,
+  broken render, `MIN_IMAGE_DIMENSION_PX`): the chip must never claim a
+  check on an image that can produce no verdict. Rejected: keeping it at
+  the top of the analyze callback with per-gate clears — one placement
+  after the gates is strictly simpler.
+- Visible pending chips joined the `syncBadges` pass (reposition on
+  layout shift, hide on collapse, reap on disconnect), and
+  `revealPendingChip` re-runs `ensureHost` so a host teardown can no
+  longer strand a chip in a detached shadow root. Rejected: promoting
+  "checking" to a full `BadgeEntry` state — a bigger refactor with the
+  same observable behavior; reconsider if the pending path grows again.
+- The intent-hide timer guard now also holds while the _image_ is
+  hovered (`image.matches(":hover")`), not just the badge — a verdict
+  handoff or popover close under a stationary pointer no longer blinks
+  the badge out. Same holds applied to gate creation (`syncIntentGate`),
+  so an in-place downgrade to Unknown under an open popover stays shown.
+- `removeAllBadges` aborts every gate controller and hide timer —
+  listeners live on the page's own `<img>` elements, so host removal
+  alone left them firing forever (§8 removability).
+
+### Popover
+
+- `.popover` is a scroll container again (`overflow-y: auto` +
+  `overscroll-behavior: contain`) _as a fallback layer_ under the
+  evidence-only scroll: when even the flex-none stack outgrows the
+  height cap (short viewports, degraded notice), the panel scrolls
+  instead of painting past the card unreachably. `.evidence` got a 64px
+  min-height floor so the borderline band can't squeeze an expanded
+  disclosure into a sliver. Rejected: reverting to whole-panel-only
+  scroll (loses the always-visible privacy line, reviewer fix 1).
+- Wheel containment is JavaScript, not CSS: `overscroll-behavior`
+  engages only where scrollable overflow exists (per spec), so a panel
+  whose evidence region absorbed the excess has no containment layer
+  under the pointer at all. The panel now consumes wheel events
+  unconditionally (non-passive `preventDefault`, binding for real wheel
+  input) and routes the delta to the innermost scrollable region under
+  the pointer (evidence, else the panel itself). Deliberate behavior
+  change: wheel over a short, uncapped panel scrolls nothing rather
+  than the page — a dialog under the pointer owns the wheel. Soak
+  caveat (2026-08-05): the browser-automation scroll action drives the
+  viewport at the compositor level regardless of pointer target — it
+  bypasses wheel dispatch, so it can neither exercise nor falsify this
+  path. Earlier same-day "page scrolled under the dialog" readings were
+  this artifact (the review's "empirically verified" chaining claim
+  likely was too). What is verified: delta routing live (wheel bursts
+  scrolled the evidence to its limit), preventDefault via the jsdom
+  test, and panel-internal scrolling via the live keyboard-scroll check
+  (privacy line reached, page scrollY unchanged), and the owner's
+  manual trackpad pass (2026-08-05): wheel over the open panel leaves
+  the page still.
+- The below/above flip side is decided once at first placement and held
+  for the panel's open lifetime (`data-side`). Rejected: threshold
+  hysteresis — decide-once is simpler and matches the old always-below
+  stability.
+- Entrance motion plays once per element: badges drop `.enter` on
+  `animationend`, the panel neutralizes `trueorigin-pop` (and its
+  headline arc's sweep) after they run — host-rebuild re-adoption no
+  longer replays animations ("never on positional re-renders").
+
+### Accessibility, performance, wire hardening
+
+- A persistent visually-hidden `role=status` region in the shadow root
+  announces "Checking this image…" when a chip first reveals (cleared
+  when the last chip goes). The chip keeps its own `role`/`aria-label`
+  for tree/touch discovery, but a live region only announces mutations
+  made while it's in the tree — the chip enters fully formed and could
+  never speak.
+- Chips lost their resting `backdrop-filter` (a live blur readback per
+  chip per scrolled frame on image-heavy pages); base alpha raised
+  0.82 → 0.92, glass now applied on hover/focus/expanded only. The
+  popover keeps full glass — one panel at a time.
+- `isWireVerdict` now validates each signal's `finding` (∈ FINDINGS) and
+  `confidence` (number): badge click keys the per-signal ring off both,
+  and an out-of-union finding would throw in the click handler the
+  guard's contract promises to prevent.
+- New `verdictClassForSignal` in core/verdict.ts (beside `mapVerdict`)
+  is the one finding→verdict-class mapping; it honors
+  `AI_LIKELY_MIN_CONFIDENCE`, so a below-threshold probabilistic signal
+  draws the unknown trace, never the near-closed "Likely AI" band.
+  `ring.ts`'s `ringStateForFinding` (which re-encoded the mapping and
+  ignored the threshold) is deleted.
+- Recorded correction: `ui-rounded` is Safari-only — no Chromium version
+  supports it, so Chrome ships the plain system face. The stack stays
+  (unknown families cost nothing; future-proof), but DESIGN.md and the
+  badge.ts comment now carry the caveat instead of claiming the rounded
+  register ships.
+
+236/236 tests pass (11 added), typecheck and Prettier clean.
+
+Post-fix live soak (same day, fixture page + reloaded unpacked build):
+verified working — resting chip solid with glass returning on hover;
+Unknown intent reveal, hover-hold after light dismiss under a resting
+pointer, and the ordinary fade-out; flip side-lock under scroll (panel
+held above its badge after space opened below); evidence min-height
+floor (usable window, no sliver); capped-panel internal scrolling to
+the privacy line via keyboard with page scroll unmoved; host-teardown
+rebuild re-adopting badge, open popover, and disclosure state, shadow
+root still closed. Wheel containment could not be exercised by
+automation (compositor-gesture caveat above) — covered by the jsdom
+preventDefault pin plus the owner's manual trackpad check (passed).

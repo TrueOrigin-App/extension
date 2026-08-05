@@ -133,6 +133,26 @@ describe("isAnalyzeResponse", () => {
       false,
     );
   });
+
+  it("rejects signals whose finding or confidence would throw at click time", () => {
+    // Badge click keys each signal's ring off finding + confidence
+    // (verdictClassForSignal → ringStateForVerdict): an out-of-union
+    // finding falls through both switches and buildRing throws inside
+    // the click handler — so it must fail the analysis here instead.
+    const signal = { providerId: "c2pa", finding: "none", confidence: 0 };
+    expect(
+      isWireVerdict({ ...verdict, signals: [{ providerId: "c2pa" }] }),
+    ).toBe(false);
+    expect(
+      isWireVerdict({ ...verdict, signals: [{ ...signal, finding: "nope" }] }),
+    ).toBe(false);
+    expect(
+      isWireVerdict({
+        ...verdict,
+        signals: [{ ...signal, confidence: "high" }],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("toWireVerdict", () => {

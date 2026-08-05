@@ -40,15 +40,28 @@ says "Unknown" when it doesn't know — that restraint *is* the brand.
 ## Operating Context
 
 - Verdicts appear as badge overlays on images in arbitrary third-party web
-  pages (viewport-based lazy scanning), with a popup detail view offering a
-  human-readable explanation and progressive disclosure ("How do we know?").
+  pages (viewport-based lazy scanning). Clicking a badge opens an anchored
+  popover with the verdict, a human-readable explanation, and progressive
+  disclosure ("How do we know?") — there is no separate browser-action popup.
 - Distribution is the Chrome Web Store; the store listing and privacy write-up
   lead with local-only validation.
-- Development reality: Phase 1 (pipeline) and the first content-script/badge
-  slice are built; Phase 2 (usable extension) is in progress per plan.md §6–§8.
-  A localhost test page (`test-page/`) exercises badges end-to-end.
-- A multi-day daily-driver soak on real sites is planned before Phase 2 is
-  declared complete.
+- Development reality: Phases 1–2 are complete (pipeline, real C2PA provider,
+  viewport scanning, verdict caching, popover, CORS fallbacks), followed by a
+  multi-day daily-driver soak on real sites; Phase 2 was declared complete
+  2026-08-05 with all soak findings recorded in DECISIONS.md. Phase 3 (brand
+  & polish) is the current work. A localhost test page (`test-page/`)
+  exercises every reachable verdict end-to-end.
+- **Real-world verdict mix (soak, confirmed 2026-08-05): almost everything is
+  Unknown.** In ordinary browsing, C2PA-signed content is essentially absent;
+  outside fixtures, badges overwhelmingly show the Unknown state. Unknown is
+  the everyday face of the product, and Phase 3 work must design for that
+  reality rather than for the rare positive verdict.
+- Phase 3 docket carried from the soak (details in DECISIONS.md): badges can
+  paint over page UI stacked above images (google.com's suggestions dropdown
+  is the first real-site corpus entry); all user-facing verdict copy is
+  placeholder awaiting the brand pass, and the "AI — likely" verdict line
+  must honestly cover both of its evidence classes; a contextual "look this
+  image up" popover link (deferred from the Lens decision) is a candidate.
 
 ## Capabilities and Constraints
 
@@ -59,6 +72,13 @@ says "Unknown" when it doesn't know — that restraint *is* the brand.
   provenance and is never inferred from absence of AI signals; probabilistic
   verdicts are labeled as probabilistic; confidence is asymmetric by design.
   Presentation (wording, color, tone) is brand work; the rules are not.
+- **"AI — likely" has two evidence classes** (owner decision 2026-08-04):
+  future probabilistic detector signals, and the shipped mapping of expired,
+  un-timestamped C2PA AI declarations — hash-verified bytes whose signing
+  time is unprovable — to 0.9 confidence. Expired *capture* claims get no
+  such forgiveness (§2 asymmetry, pinned by test). This aged-declaration
+  class plausibly covers the largest population of real AI images carrying
+  provenance.
 - **Free-tier privacy:** media bytes and page URLs never leave the machine.
   Validation runs locally (WASM in the MV3 service worker). Trust-infrastructure
   fetches (trust lists, revocation) are permitted, disclosed in DECISIONS.md,
@@ -74,8 +94,10 @@ says "Unknown" when it doesn't know — that restraint *is* the brand.
 - **Verdict wording shown to users is brand territory** — finalized in Phase 3,
   never changed casually.
 - Undecided (recorded, not invented): paid-tier pricing and packaging; second
-  signal provider choice (Phase 4); video/audio support, Firefox/Safari ports,
-  and in-house detection are explicit non-goals for now.
+  signal provider choice (an unsigned generator-metadata provider is
+  owner-approved on the docket, not yet scheduled — Phase 4); video/audio
+  support, Firefox/Safari ports, and in-house detection are explicit
+  non-goals for now.
 
 ## Brand Commitments
 
@@ -91,13 +113,16 @@ says "Unknown" when it doesn't know — that restraint *is* the brand.
 
 ## Evidence on Hand
 
-- Real C2PA fixtures at `src/providers/c2pa/fixtures/`, including
-  `ai_declared.png` carrying genuine OpenAI provenance. A real capture-signed
-  photo for "Human — verified" is planned during the soak — that verdict
-  currently has no end-to-end fixture.
-- Local-only network posture is verified by tests (egress allowlist) and
-  documented per-request-type in DECISIONS.md — this feeds the Phase 3 privacy
-  write-up.
+- Real C2PA fixtures at `src/providers/c2pa/fixtures/`: `ai_declared.png`
+  (genuine OpenAI provenance, validates Trusted) and `ai_expired.png` (real
+  GPT-4o-era OpenAI provenance with an expired, un-timestamped signing cert —
+  exercises the "AI — likely" mapping end-to-end; stable by nature, the cert
+  stays expired). A real capture-signed photo for "Human — verified" was not
+  acquired during the soak (confirmed 2026-08-05) — that verdict still has no
+  end-to-end fixture and is exercised only at the unit level.
+- Local-only network posture is verified by tests (egress allowlist),
+  documented per-request-type in DECISIONS.md, and held up through the
+  daily-driver soak — this feeds the Phase 3 privacy write-up.
 - **Absences future work must not fabricate:** no users, testimonials, case
   studies, press, benchmarks, install counts, or pricing. Do not invent them.
 
@@ -117,7 +142,7 @@ says "Unknown" when it doesn't know — that restraint *is* the brand.
 
 ## Accessibility & Inclusion
 
-WCAG 2.2 AA is a hard floor for all extension UI — badges, popup, and any
+WCAG 2.2 AA is a hard floor for all extension UI — badges, popover, and any
 future settings surface (confirmed 2026-07-26). Applied to this product, AA's
 use-of-color criterion means verdict states must be distinguishable without
 color alone; badges render over arbitrary host-page imagery, so contrast must

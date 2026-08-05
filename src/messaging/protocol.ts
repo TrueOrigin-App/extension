@@ -7,6 +7,7 @@
 // channel only — they never leave the machine (plan.md §8, constraint 3).
 
 import {
+  FINDINGS,
   VERDICT_IDS,
   type ProviderFailure,
   type SignalResult,
@@ -92,8 +93,11 @@ export function isAnalyzeUrlRequest(
 
 /** Shape check for a verdict arriving off the wire. Deep enough to cover
  * every dereference the content script performs at badge-click time
- * (popover.ts iterates signals/failures and reads providerId/message);
- * signal detail stays `unknown` — presenters harden it themselves. */
+ * (popover.ts iterates signals/failures, reads providerId/message, and
+ * keys each signal's ring off finding + confidence via
+ * verdictClassForSignal — an out-of-union finding would throw in the
+ * click handler); signal detail stays `unknown` — presenters harden it
+ * themselves. */
 export function isWireVerdict(value: unknown): value is WireVerdict {
   if (!isRecord(value)) return false;
   return (
@@ -102,7 +106,10 @@ export function isWireVerdict(value: unknown): value is WireVerdict {
     Array.isArray(value["signals"]) &&
     value["signals"].every(
       (signal: unknown) =>
-        isRecord(signal) && typeof signal["providerId"] === "string",
+        isRecord(signal) &&
+        typeof signal["providerId"] === "string" &&
+        (FINDINGS as readonly unknown[]).includes(signal["finding"]) &&
+        typeof signal["confidence"] === "number",
     ) &&
     Array.isArray(value["failures"]) &&
     value["failures"].every(

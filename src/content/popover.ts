@@ -8,6 +8,7 @@
 // (src/providers/presenters.ts), so a new provider needs zero changes here
 // (plan.md §8, constraint 4).
 
+import { verdictClassForSignal } from "../core/verdict";
 import type { WireVerdict } from "../messaging/protocol";
 import { presentSignal } from "../providers/presenters";
 import {
@@ -15,6 +16,7 @@ import {
   VERDICT_EXPLANATIONS,
   VERDICT_LABELS,
 } from "./labels";
+import { buildRing, ringStateForVerdict } from "./ring";
 
 let nextEvidenceId = 0;
 
@@ -29,7 +31,16 @@ function signalSection(signal: WireVerdict["signals"][number]): HTMLDivElement {
   const { summary, facts } = presentSignal(signal);
   const section = document.createElement("div");
   section.className = "signal";
-  section.append(paragraph("summary", summary));
+  // Each signal is its own ring — the aggregation architecture drawn as
+  // geometry; a future provider arrives as one more ring, no new grammar.
+  // The ring's class comes from core's verdictClassForSignal, so it can
+  // never claim more than mapVerdict would grant the same signal — a
+  // below-threshold probabilistic signal draws the unknown trace, not
+  // the near-closed "Likely AI" band.
+  section.append(
+    buildRing(ringStateForVerdict(verdictClassForSignal(signal)), "ring"),
+    paragraph("summary", summary),
+  );
 
   if (facts.length > 0) {
     const list = document.createElement("dl");
@@ -53,8 +64,16 @@ function signalSection(signal: WireVerdict["signals"][number]): HTMLDivElement {
 export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   const fragment = document.createDocumentFragment();
 
-  fragment.append(
+  // Headline row: the verdict's ring at reading size beside its name; the
+  // arc re-sweeps to its honest band each time the panel opens.
+  const header = document.createElement("div");
+  header.className = "verdict";
+  header.append(
+    buildRing(ringStateForVerdict(verdict.verdict), "ring"),
     paragraph("headline", VERDICT_LABELS[verdict.verdict]),
+  );
+  fragment.append(
+    header,
     paragraph("explain", VERDICT_EXPLANATIONS[verdict.verdict]),
   );
 
