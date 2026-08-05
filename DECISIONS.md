@@ -1912,3 +1912,14 @@ recorded and deliberately kept on the Phase 3 docket.
   against a corpus of real sites, of which google.com is now the first
   entry). The 96 px gate above incidentally removes the worst cases
   where the covered "image" was itself an icon-sized thumbnail.
+- **Third candidate (owner question, 2026-08-04):** matching the image's
+  z-index is impossible in principle — z-index only orders siblings
+  within one stacking context, and occlusion is decided by the ancestor
+  chains, not by any number on the image — but the underlying goal
+  ("badge covered exactly when its image is covered") has a
+  construction-correct form: inject each badge into the page DOM as a
+  positioned sibling of its image, sharing its stacking context,
+  clipping, and scrolling by definition. Rejected at task 4 for
+  DOM-safety (host layout, framework reconciliation, page CSS selectors,
+  self-filtering observers); goes on the Phase 3 docket as the
+  alternative to heuristics, to be weighed against that risk.
