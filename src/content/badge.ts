@@ -77,8 +77,8 @@ const CONTAINED_EVENT_TYPES = [
 // Dark-glass chip and panel, one functional hue per verdict class (never
 // color alone: band + glyph carry the state), ui-rounded-first system type
 // so no web font ever loads into a host page (ui-rounded is Safari-only —
-// Chrome renders the plain system face; caveat recorded in DESIGN.md and
-// DECISIONS.md, 2026-08-05). Verdict hues hold ≥3:1
+// on Chrome the plain system face is the committed voice, owner decision
+// in DESIGN.md and DECISIONS.md, 2026-08-05). Verdict hues hold ≥3:1
 // non-text contrast against the chip's worst-case (white-page) backdrop;
 // the focus ring pairs a light outline with a dark halo so it reads over
 // arbitrary imagery.
@@ -328,6 +328,15 @@ const BADGE_STYLE = `
   .popover > .evidence::-webkit-scrollbar-track {
     background: transparent;
   }
+  /* The panel's own scrollbar (whole-panel fallback) runs the full
+     padding-box height, which puts the thumb's extremes inside the
+     14px corner arcs — floating past the glass. Insetting the track
+     by the corner radius bounds the thumb's travel to the straight
+     edge. The evidence scroller needs no inset: it sits 14px inside
+     the panel, nowhere near the corners. */
+  .popover::-webkit-scrollbar-track {
+    margin: 14px 0;
+  }
   .verdict {
     display: flex;
     align-items: center;
@@ -367,21 +376,24 @@ const BADGE_STYLE = `
     cursor: pointer;
   }
   /* Drawn chevron (no glyph-font arrows): a stroked corner that rotates
-     from "closed" to "open". */
+     from "closed" to "open". The corner's visual mass sits ~1.75px off
+     the box center toward its point (stroke midlines at 2.5px of the
+     3.5px half-box, x sqrt(2)/2), so a counter-translate re-centers the
+     glyph on the label's centerline in each rotation; both states keep
+     matching translate()+rotate() lists so the toggle interpolates as
+     one transform move. */
   .disclosure::before {
     content: "";
     box-sizing: border-box;
     width: 7px;
     height: 7px;
-    margin-top: -2px;
     border-right: 2px solid currentColor;
     border-bottom: 2px solid currentColor;
-    transform: rotate(-45deg);
+    transform: translate(-1.75px, 0) rotate(-45deg);
     transition: transform 0.2s ease;
   }
   .disclosure[aria-expanded="true"]::before {
-    margin-top: -4px;
-    transform: rotate(45deg);
+    transform: translate(0, -1.75px) rotate(45deg);
   }
   .disclosure:focus-visible {
     outline: 2px solid #f5f6f7;

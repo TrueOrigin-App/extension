@@ -107,8 +107,9 @@ the shadow root's first node (`DIRECTION_CONTRACT` in
 - One functional hue per verdict class; state never carried by color alone
 - Discrete honest ring bands — geometry never fakes precision
 - System type only (`ui-rounded` first); zero web fonts touch host pages.
-  Caveat (2026-08-05 review): `ui-rounded` is a Safari-only generic —
-  Chrome, the shipping target, falls through to the plain system face
+  On Chrome, the shipping target, that means the plain system face — an
+  owner-committed decision (2026-08-05), not a caveat; roundness is
+  carried by geometry, and Safari resolves `ui-rounded` for free
 - One authored motion moment: the arc sweeping to its honest band
 - Guest posture: the host page's content always outranks our chrome
 
@@ -178,13 +179,20 @@ complication sizes. Friendly geometry without a licensed face — and,
 deliberately, zero web-font loads into host pages (a privacy and
 guest-posture commitment, not a shortcut).
 
-**Caveat (2026-08-05 post-ship review):** `ui-rounded` resolves only in
-Safari; no Chromium version supports it, so in Chrome — the extension's
-only shipping target — every surface renders the plain system face
-(SF/Segoe/Roboto). The rounded register is an aspiration the stack is
-ready for, not what ships today; the stack stays because unknown family
-names cost nothing and Safari support arrives for free if the surface
-ever runs there.
+**The Chrome face is the committed voice (owner decision, 2026-08-05).**
+`ui-rounded` resolves only in Safari; no Chromium version supports it, so
+in Chrome — the extension's only shipping target — every surface renders
+the plain system face (SF/Segoe/Roboto), and that face is what this
+system commits to, not a degraded fallback. Bundling a rounded web font
+was considered and rejected: Chrome ignores `@font-face` declared inside
+shadow roots (probe-verified 2026-08-05 against a document-level
+control), so any bundled face would have to be registered in each host
+page's own document — observable by the page, ~40–80KB on every page
+visited, and a breach of the zero-web-fonts and single-footprint
+commitments above. The rounded personality lives in geometry instead:
+the pill, the rings, the round caps, the drawn glyphs. `ui-rounded`
+stays first in the stack because unknown family names cost nothing and
+Safari support arrives for free if the surface ever runs there.
 
 ### Hierarchy
 
@@ -215,7 +223,9 @@ and scroll with the page.
 - **Popover placement:** 8px in from the image's left edge, 6px below the
   badge; clamped inside the viewport with an 8px margin; flips above the
   badge when below is short and above fits. When neither fits, below wins
-  and the panel scrolls internally.
+  and the panel scrolls internally. The side is decided at first placement
+  and held for the panel's open lifetime (`data-side`) — re-deciding per
+  scroll tick would teleport an open panel across its badge mid-read.
 - **Popover envelope:** width `min(300px, calc(100vw - 24px))`, max-height
   `min(340px, 70vh)`. The panel is a flex column in which only the evidence
   region scrolls — verdict, disclosure toggle, and privacy line stay visible
@@ -363,6 +373,9 @@ scale from 0.98). Fixed content order, top to bottom:
    `rgba(245, 246, 247, 0.38)` — clears 3:1 against the panel's
    worst-case backdrop) so truncation is never invisible; separated
    by a Track Frost hairline; per-signal rows and failure lines inside.
+   When the whole panel scrolls instead (the short-viewport fallback),
+   its scrollbar track is inset by the 14px corner radius so the thumb
+   travels only the straight edge — it never rides the corner arcs.
 6. **Privacy line** (Footnote, Unknown Gray): the trust claim stays visible
    at every panel height — it never scrolls away.
 - **Dismissal:** light dismiss on outside pointerdown (scrollbar drags

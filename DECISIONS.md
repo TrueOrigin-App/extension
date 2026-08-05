@@ -2672,3 +2672,88 @@ hues measured 6.0–8.8:1 non-text and all text 7.2:1+ against worst-case
   keyCharacteristics), clearing the sidecar-stale warning.
 
 237/237 tests pass (1 added), typecheck and Prettier clean.
+
+## 2026-08-05 — Chevron optical centering; system face committed on Chrome
+
+Two `/impeccable` fixes from an owner report (the disclosure chevron
+riding off its label's centerline; "the rounded font we wanted isn't
+available on Chrome").
+
+- Disclosure chevron re-centered (`badge.ts`): the rotated stroked
+  corner carries its visual mass ~1.75px off its box center toward the
+  point (stroke midlines sit 2.5px from center on a 3.5px half-box,
+  x sqrt(2)/2), and the old eyeballed `margin-top: -2px` / `-4px`
+  compensation pushed the glyph ~3px below the text centerline — the
+  misalignment the owner saw — and jumped without transition at toggle
+  (only `transform` was transitioned). Replaced with per-state
+  counter-translates inside the transform itself
+  (`translate(-1.75px, 0) rotate(-45deg)` closed,
+  `translate(0, -1.75px) rotate(45deg)` open): matching
+  translate+rotate function lists interpolate as one move, and no
+  layout property shifts between states. Verified at 7x magnification
+  against the shipped CSS — both states sit on the label's optical
+  centerline. Alternatives rejected: re-tuning the margins (stays
+  eyeballed, couples layout to rotation state, and margin changes
+  don't transition); an SVG chevron (DESIGN.md commits the disclosure
+  to a stroked, rotating CSS corner; no reason to grow the DOM).
+- The plain system face is the committed type voice on Chrome (owner
+  decision via structured ask, this session). `ui-rounded` resolves
+  only in Safari, and a live probe — validated against a
+  document-level `src: local()` control that did resolve — confirmed
+  Chrome ignores `@font-face` declared inside shadow roots, so a
+  bundled rounded face could not stay inside the overlay's closed
+  shadow scope; it would need document-level registration in every
+  host page. Alternatives rejected: bundling an OFL rounded face
+  (~40–80KB into every page visited, page-observable fingerprint
+  surface, breaches the zero-web-fonts and single-footprint
+  commitments); popover-in-iframe (partial — the badge pill keeps the
+  system face anyway — plus a web_accessible_resources fingerprint
+  surface and cross-frame anchoring/focus/dismiss rework). DESIGN.md's
+  2026-08-05 caveat is rewritten as the commitment (roundness lives in
+  the geometry: pill, rings, round caps, drawn glyphs);
+  `.impeccable/design.json` synced (chevron snippet, type
+  characteristic). The stack keeps `ui-rounded` first — unknown family
+  names cost nothing and Safari resolves it for free.
+
+237/237 tests pass, typecheck, build, and Prettier clean.
+
+## 2026-08-05 — Panel scrollbar bounded to the popover's rounded shape
+
+Owner report: in the whole-panel scroll fallback (short viewport), the
+popover's own scrollbar runs the full padding-box height, so the thumb's
+extremes sit inside the 14px corner arcs — a gray pill floating past the
+glass, over the host page. Fix (`badge.ts`):
+`.popover::-webkit-scrollbar-track { margin: 14px 0 }` — insetting the
+track by exactly the corner radius bounds the thumb's travel to the
+straight edge. Verified in Chrome against a light host background
+(worst case for a floating thumb): top corner clean at rest, bottom
+corner clean scrolled to end. The evidence region's scrollbar gets no
+inset — it sits 14px inside the panel, nowhere near the corners.
+Alternatives rejected: an inner scroll wrapper clipped by the radius
+(restructures the panel DOM and the flex column that keeps the privacy
+line pinned, for the same visual result); `border-radius`-clipping via
+`overflow: clip` on a wrapper (same objection). DESIGN.md's popover
+section records the rule alongside the scrollbar prose; the
+`.impeccable/design.json` popover snippet carries no scrollbar CSS, so
+no sidecar sync was needed.
+
+237/237 tests pass, typecheck, build, and Prettier clean.
+
+## 2026-08-05 — `/impeccable document` refresh: DESIGN.md trued against code
+
+Owner chose refresh over overwrite/merge (structured ask): re-scan the
+shipped implementation and true up values while keeping the committed
+voice, North Star, and named rules. Full diff of DESIGN.md against
+`badge.ts` (complete stylesheet, host setup, placement math), `ring.ts`
+(bands, geometry, glyph paths), `popover.ts` (content order), and
+`labels.ts` (finalized strings): **every frontmatter token and prose
+value matches the code** — the session's incremental syncs held, so no
+corrections were needed. The scan surfaced one durable placement fact
+DESIGN.md lacked, now added to Layout: the popover's side (below/above)
+is decided at first placement and held for the open lifetime
+(`data-side`), so an open panel never teleports across its badge as
+scrolling crosses the fits-below threshold. Sidecar refreshed:
+`generatedAt` bumped, and the type keyCharacteristic made verbatim with
+DESIGN.md's bullet per the narrative-mapping rule (it had drifted into a
+paraphrase). Components, colorMeta, shadows, and motion all verified
+current — untouched.
