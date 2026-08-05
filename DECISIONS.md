@@ -2289,3 +2289,32 @@ Chrome pass over `ad1cf6b`, all green:
   used to silently disable).
 - Closed-shadow popover: click inside does not dismiss; outside click
   and Escape behave as pinned.
+
+## 2026-08-04 — Phase 2 declared complete (owner decision)
+
+The owner has closed the §6 cadence gate: the daily-driver soak is done
+(its findings — scroll hijack, min-size gate, badge occlusion, the
+expired-declaration mapping, and the review wave — are all recorded and
+resolved above). With that, the §6 Phase 2 checklist is fully
+accounted for: viewport lazy scanning and verdict caching (5.1/5.2),
+popup/popover with progressive disclosure (5.3), Google Lens
+right-click resolved as skipped (5.4, owner decision), byte-acquisition
+CORS fallbacks hardened and review-verified (5.5 + fixes), and all four
+badge states implemented. **Phase 2 is complete.**
+
+Honest caveats carried forward, not gates:
+
+- **"Human — verified" has never been exercised end to end** — the
+  state is implemented and unit-tested, but the capture-signed fixture
+  (trust-listed device) was never acquired during the soak. Carries as
+  an open item; the verdict is unreachable with self-signed material by
+  design.
+- Known-open trio from 5.1 (shadow-DOM image discovery on Lit sites,
+  `all_frames` iframes, CSS-animation re-anchoring) and the Phase 3
+  docket (badge occlusion, "AI — likely" wording, popover link) carry
+  into Phase 3.
+- The `ai_declared.png` cert-expiry CI tripwire stands as documented.
+
+Next per plan.md: merge PR #6 (owner), then the second
+`/impeccable init` pass — the authoritative post-soak re-interview —
+opens Phase 3.
