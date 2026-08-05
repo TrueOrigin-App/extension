@@ -166,6 +166,16 @@ describe("egress allowlist", () => {
     expect(drainRecent()).toEqual([]);
   });
 
+  it("the expired-cert AI declaration makes no requests", async () => {
+    // Expiry handling is pure certificate math — no OCSP, no CRL, no
+    // timestamp authority lookup may sneak in.
+    const result = await provider.analyze(
+      await fixtureInput("ai_expired.png", "image/png"),
+    );
+    expect(result.finding).toBe("ai-indicated");
+    expect(drainRecent()).toEqual([]);
+  });
+
   it("a remote-manifest asset requests exactly its embedded URL", async () => {
     const result = await provider.analyze(await fixtureInput("cloud.jpg"));
     expect((result.detail as C2paDetail).reason).toBe("no-origin-declaration");

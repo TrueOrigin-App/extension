@@ -1923,3 +1923,81 @@ recorded and deliberately kept on the Phase 3 docket.
   DOM-safety (host layout, framework reconciliation, page CSS selectors,
   self-filtering observers); goes on the Phase 3 docket as the
   alternative to heuristics, to be weighed against that risk.
+
+## 2026-08-04 — Expired-cert AI declarations map to "AI — likely" (owner decision)
+
+A soak finding with product-wide reach, resolved by the owner after the
+options were presented (this touches §2 verdict semantics, so it was an
+ask, not a free choice).
+
+### The finding
+
+The owner's GPT-4o-era ChatGPT image (real OpenAI provenance: two-manifest
+chain signed "OpenAI" via "Truepic Lens CLI in Sora", `c2pa.created` by
+GPT-4o with `trainedAlgorithmicMedia`) badged **Unknown**. Diagnosis
+against the real WASM with production trust lists: every content check
+passes — data hashes match, chain anchors to the trust list, claim
+signature valid — but `signingCredential.expired` fails, and that era of
+OpenAI's pipeline attached **no trusted timestamp**, so there is no
+independent proof the signature predates the cert's expiry. c2pa-rs rules
+the store `Invalid`; the task-3 mapping ("not Valid/Trusted → none") made
+it Unknown. Impact class: every un-timestamped AI provenance ages into
+this state as its short-lived signing certs expire — plausibly the
+largest population of real AI images on the web.
+
+### The decision (owner-selected from three options)
+
+Map the narrow class to **`ai-indicated`, confidence 0.9**
+(`EXPIRED_AI_DECLARATION_CONFIDENCE`) → verdict **"AI — likely"**:
+
+- **Qualifying conditions (all required):** validation state `Invalid`;
+  an AI source type present in the chain; `signingCredential.expired`
+  among the failure codes; and every failure code in the tolerated set
+  {`signingCredential.expired`, `signingCredential.untrusted`}.
+- **Why untrusted rides along:** the task-3 accept-AI-at-Valid policy
+  already takes AI declarations from untrusted signers at full
+  `ai-declared` strength — an untrusted signer cannot coherently block
+  the strictly weaker probabilistic finding. (Verified: under production
+  anchors the OpenAI fixture fails with `expired` alone; under the
+  vendored test anchors `untrusted` joins it.)
+- **Why not revocation or content failures:** a revoked cert is the
+  leaked-cert scenario itself, and any hash/assertion failure means the
+  manifest may not describe these bytes — both stay `invalid-manifest`.
+- **Why 0.9:** hash-verified bytes, provably what the declarer signed —
+  high; timing unprovable (backdating with a leaked expired cert is
+  unfalsifiable) — short of the 1.0 that §2 reserves for cryptographic
+  certainty. Clears `AI_LIKELY_MIN_CONFIDENCE` (0.7), so the verdict is
+  the probabilistic one §2 already defines, labeled as probabilistic.
+- **Asymmetry preserved (§2):** expired _capture_ claims get no
+  forgiveness — still `invalid-manifest` → Unknown. Forging "human" is
+  the attack that matters. Pinned by test.
+- **Rejected:** keeping Unknown (the strictest reading writes off the
+  biggest real-world AI class while its declarations are hash-verified);
+  accepting as `ai-declared` (overclaims — §2 pins that verdict to
+  cryptographic confidence that expired-without-timestamp cannot
+  deliver).
+
+### Mechanics
+
+- `mapManifestStore` now owns the confidence scale (`MappedStore` gained
+  `confidence`; the provider passes it through instead of pinning 1/0 by
+  finding). New detail reason `expired-ai-declaration`; the presenter
+  registry's compiler-exhaustive `SUMMARIES` forced the popover copy at
+  compile time (placeholder wording, Phase 3 refines).
+- **Fixture:** the owner's image is vendored as
+  `fixtures/ai_expired.png` (README updated) — integration tests pin the
+  provider mapping and the end-to-end "AI — likely" verdict against the
+  real WASM, the egress suite pins that expiry handling makes no network
+  requests (no OCSP/CRL/TSA lookups), and the test page gains the
+  figure. This fixture is stable by nature: the cert stays expired.
+- **Phase 3 wording note:** the verdict-level "AI — likely" explanation
+  ("Detection signals suggest…") was written for classifier signals;
+  for this path the specifics live in the disclosure summary. Fine as
+  placeholder; the Phase 3 pass should make the verdict line cover both
+  sources honestly.
+- **Watch item:** `ai_declared.png` (newer OpenAI pipeline) carries
+  timestamps but showed `timeStamp.untrusted` alongside
+  `timeStamp.validated` in its results — if its TSA is not on the trust
+  lists, that fixture inherits this same cliff when its signing cert
+  expires (CI would fail loudly on the Trusted assertions; the mapping
+  added here is what keeps the _product_ behavior sane when it does).

@@ -1,6 +1,6 @@
 import type { Action, ManifestStore } from "@contentauth/c2pa-web";
 import { describe, expect, it } from "vitest";
-import { mapManifestStore } from "./mapping";
+import { EXPIRED_AI_DECLARATION_CONFIDENCE, mapManifestStore } from "./mapping";
 
 const DST = {
   aiCreated:
@@ -290,6 +290,158 @@ describe("mapManifestStore", () => {
 
   it("treats a missing validation state as unusable", () => {
     const result = mapManifestStore(store({ state: null }));
+    expect(result.finding).toBe("none");
+    expect(result.detail.reason).toBe("invalid-manifest");
+  });
+
+  it("maps an AI declaration whose only defect is an expired cert to ai-indicated", () => {
+    // Owner decision 2026-08-04: content hashes verified, chain otherwise
+    // fine, but the signing cert expired with no trusted timestamp — the
+    // declaration is real yet its timing is unprovable, so it is
+    // probabilistic (verdict "AI — likely"), never "ai-declared".
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: ["signingCredential.expired"],
+        manifests: [
+          {
+            label: "m1",
+            actions: [
+              { action: "c2pa.created", digitalSourceType: DST.aiCreated },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.finding).toBe("ai-indicated");
+    expect(result.confidence).toBe(EXPIRED_AI_DECLARATION_CONFIDENCE);
+    expect(result.detail.reason).toBe("expired-ai-declaration");
+    expect(result.detail.aiSourceTypes).toEqual([DST.aiCreated]);
+    expect(result.detail.validationFailures).toEqual([
+      "signingCredential.expired",
+    ]);
+  });
+
+  it("tolerates an untrusted signer alongside the expired cert", () => {
+    // Untrusted signers already pass the accept-AI-at-Valid policy at
+    // full ai-declared strength, so untrusted cannot be what blocks the
+    // strictly weaker ai-indicated.
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: [
+          "signingCredential.expired",
+          "signingCredential.untrusted",
+        ],
+        manifests: [
+          {
+            label: "m1",
+            actions: [
+              { action: "c2pa.created", digitalSourceType: DST.aiCreated },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.finding).toBe("ai-indicated");
+    expect(result.detail.reason).toBe("expired-ai-declaration");
+  });
+
+  it("requires expiry itself — untrusted alone stays invalid-manifest", () => {
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: ["signingCredential.untrusted"],
+        manifests: [
+          {
+            label: "m1",
+            actions: [
+              { action: "c2pa.created", digitalSourceType: DST.aiCreated },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.finding).toBe("none");
+    expect(result.detail.reason).toBe("invalid-manifest");
+  });
+
+  it("gives a revoked cert no forgiveness even with expiry present", () => {
+    // Revocation is the leaked-cert scenario itself — the exact attack
+    // the timestamp caveat worries about.
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: [
+          "signingCredential.expired",
+          "signingCredential.revoked",
+        ],
+        manifests: [
+          {
+            label: "m1",
+            actions: [
+              { action: "c2pa.created", digitalSourceType: DST.aiCreated },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.finding).toBe("none");
+    expect(result.detail.reason).toBe("invalid-manifest");
+  });
+
+  it("keeps invalid-manifest when an expired cert is joined by any other failure", () => {
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: [
+          "signingCredential.expired",
+          "assertion.dataHash.mismatch",
+        ],
+        manifests: [
+          {
+            label: "m1",
+            actions: [
+              { action: "c2pa.created", digitalSourceType: DST.aiCreated },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.finding).toBe("none");
+    expect(result.detail.reason).toBe("invalid-manifest");
+  });
+
+  it("gives an expired capture claim no forgiveness (asymmetry, §2)", () => {
+    // Self-signing a "camera" manifest with a leaked expired cert is the
+    // attack on "Human — verified"; only AI declarations — statements
+    // against interest — get the probabilistic reading.
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: ["signingCredential.expired"],
+        manifests: [
+          {
+            label: "m1",
+            actions: [
+              { action: "c2pa.created", digitalSourceType: DST.capture },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.finding).toBe("none");
+    expect(result.detail.reason).toBe("invalid-manifest");
+  });
+
+  it("keeps invalid-manifest for an expired cert with no AI declaration", () => {
+    const result = mapManifestStore(
+      store({
+        state: "Invalid",
+        failureCodes: ["signingCredential.expired"],
+        manifests: [{ label: "m1", actions: [{ action: "c2pa.created" }] }],
+      }),
+    );
     expect(result.finding).toBe("none");
     expect(result.detail.reason).toBe("invalid-manifest");
   });

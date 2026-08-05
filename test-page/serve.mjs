@@ -16,6 +16,7 @@ const FIXTURES = new URL("../src/providers/c2pa/fixtures/", import.meta.url);
 // configs) is served.
 const FIXTURE_TYPES = new Map([
   ["ai_declared.png", "image/png"],
+  ["ai_expired.png", "image/png"],
   ["C.jpg", "image/jpeg"],
   ["no_manifest.jpg", "image/jpeg"],
   ["cloud.jpg", "image/jpeg"],

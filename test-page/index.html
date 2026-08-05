@@ -55,6 +55,23 @@
     </figure>
 
     <figure>
+      <img
+        src="/fixtures/ai_expired.png"
+        alt="Expired-certificate AI declaration fixture"
+      />
+      <figcaption>
+        <strong>ai_expired.png</strong> — real GPT-4o-era ChatGPT provenance
+        whose signing certificate has since expired, with no trusted timestamp
+        (owner decision 2026-08-04). Content hashes verify, so the declaration
+        is real but its timing is unprovable. Expected badge:
+        <em>AI — likely</em> (probabilistic, never “declared”); the popover
+        disclosure should say the statement “can't be fully verified”, with
+        “Signed by OpenAI”, “Declares: Created with an AI model”, and the
+        <code>signingCredential.expired</code> technical detail.
+      </figcaption>
+    </figure>
+
+    <figure>
       <img src="/fixtures/C.jpg" alt="C2PA test-signed fixture" />
       <figcaption>
         <strong>C.jpg</strong> — valid manifest, test-CA signer, no origin
