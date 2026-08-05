@@ -2009,3 +2009,42 @@ Map the narrow class to **`ai-indicated`, confidence 0.9**
   the fixture flips to Invalid + expired, the mapping above keeps the
   product verdict sane ("AI — likely"), and the CI assertions pinning
   Trusted/ai-declared will need updating.
+
+## 2026-08-04 — Future task (owner-approved): unsigned generator-metadata provider
+
+Queued during the task-5.5 soak, after the expired-cert discussion
+established that the C2PA mapping now covers everything C2PA can honestly
+say. This is the next growth path for "AI — likely", approved by the
+owner as a docket item — not yet scheduled.
+
+- **What:** a second local signal provider that reads the _unsigned_
+  generator metadata many real AI images carry: Stable Diffusion /
+  A1111 "parameters" and ComfyUI "prompt"/"workflow" PNG text chunks,
+  IPTC credits like "Made with Google AI" (Gemini), and unsigned XMP
+  `Iptc4xmpExt:DigitalSourceType` values in the AI set. Emits
+  `ai-indicated` at moderate confidence (provisionally ~0.7–0.8; below
+  the C2PA expired-declaration's 0.9 — no signature at all here), so the
+  verdict reads "AI — likely", explicitly probabilistic.
+- **Why:** the largest population of AI images in the wild (local SD
+  output, tools that never adopted C2PA) carries exactly this metadata
+  and no Content Credentials — today it all reads Unknown. The signal is
+  trivially strippable and forgeable, which is precisely what the
+  probabilistic tier is for; nobody accidentally embeds an SD prompt in
+  a family photo, so accidental false positives are rare.
+- **Architecture:** a new provider in `src/providers/` — constraint 4
+  makes this the zero-cost path (the Phase-1 exit-criterion test already
+  proves the pipeline takes a new provider with no outside changes),
+  plus a presenter entry for the popover. Runs in the worker on the
+  bytes already acquired; no new permissions, no network.
+- **§8 flags for the implementation session:** parsing PNG text chunks
+  and basic EXIF/XMP by hand is feasible; if a parsing library is
+  preferred instead, that is a new-runtime-dependency ask. Popover
+  wording for the new signal is placeholder-then-Phase-3 like the rest.
+- **Open design questions:** exact marker list and how conservative to
+  be (a bare "Software: xyz" EXIF name is weaker evidence than a full SD
+  parameters block — the task-3 rejection of name matching stays binding
+  for signed C2PA fields, but this provider's whole domain is heuristic,
+  so it needs its own recorded line); confidence value; whether a
+  detected-but-below-threshold marker should still surface in the
+  popover's evidence list (the pipeline already supports it —
+  below-threshold signals stay visible in `Verdict.signals`).
