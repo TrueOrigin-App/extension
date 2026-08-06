@@ -921,22 +921,28 @@ function scheduleIntentHide(image: HTMLImageElement, entry: BadgeEntry): void {
     // stationary pointer, and no boundary event is left to re-reveal.
     if (openPopover?.image === image) return;
     if (entry.element.matches(":hover, :focus-within")) return;
-    if (image.matches(":hover")) return;
+    if (isImageUnderPointer(image)) return;
     entry.element.dataset["presence"] = "hidden";
   }, INTENT_HIDE_DELAY_MS);
 }
 
 /** Applies the presence model (owner decision, 2026-08-05): strong
  * verdicts assert themselves unprompted; Unknown sits hidden until the
- * reader shows intent — hovering the image, or focus reaching the badge.
- * The listeners live on the page's own image element but are read-only:
- * listening changes nothing about the page DOM. */
+ * reader shows intent — the pointer over the image, or focus reaching the
+ * badge. Pointer intent is sensed by the shared document-level sensor
+ * (see syncIntentSensor), never by listeners on the image: pages that
+ * stack a click-capture overlay over their images (Instagram's feed is
+ * the recorded field case, 2026-08-06) starve the image of pointer
+ * events entirely, and a gate keyed on them can never reveal. Only the
+ * badge's own listeners live here — the overlay paints above any page
+ * layer, so its events are trustworthy. */
 function syncIntentGate(image: HTMLImageElement, entry: BadgeEntry): void {
   if (entry.verdict.verdict !== "unknown") {
     if (entry.gate) {
       cancelHide(entry);
       entry.gate.controller.abort();
       entry.gate = null;
+      syncIntentSensor();
     }
     delete entry.element.dataset["presence"];
     return;
@@ -952,24 +958,19 @@ function syncIntentGate(image: HTMLImageElement, entry: BadgeEntry): void {
   const held =
     openPopover?.image === image ||
     entry.element.matches(":hover, :focus-within") ||
-    image.matches(":hover");
+    isImageUnderPointer(image);
   entry.element.dataset["presence"] = held ? "shown" : "hidden";
   const { signal } = controller;
-  const reveal = (): void => revealIntentBadge(entry);
   const hide = (): void => scheduleIntentHide(image, entry);
-  image.addEventListener("pointerenter", reveal, { signal });
-  // pointerenter alone misses the commonest arrival: the page scrolling
-  // until the image sits under a stationary cursor fires no boundary
-  // event, and later movement stays inside the image (verified live,
-  // 2026-08-05). The first in-image move is the intent signal instead.
-  image.addEventListener("pointermove", reveal, { signal });
-  image.addEventListener("pointerleave", hide, { signal });
   entry.element.addEventListener("pointerenter", () => cancelHide(entry), {
     signal,
   });
   entry.element.addEventListener("pointerleave", hide, { signal });
-  entry.element.addEventListener("focusin", reveal, { signal });
+  entry.element.addEventListener("focusin", () => revealIntentBadge(entry), {
+    signal,
+  });
   entry.element.addEventListener("focusout", hide, { signal });
+  syncIntentSensor();
 }
 
 // In-flight indicators (finish-review fix 2): while an image's analysis
@@ -981,10 +982,129 @@ function syncIntentGate(image: HTMLImageElement, entry: BadgeEntry): void {
 // gate as Unknown.
 interface PendingEntry {
   element: HTMLDivElement | null;
-  controller: AbortController;
   hideTimer: number | null;
 }
 const pending = new Map<HTMLImageElement, PendingEntry>();
+
+// ---------------------------------------------------------------------------
+// Shared intent sensor (task: Instagram field bug, 2026-08-06). One
+// document-level capture-phase pointer listener serves every intent-gated
+// entry — gated Unknown badges and pending chips alike — in place of
+// per-image pointerenter/move/leave listeners. Listening on the image
+// breaks wherever a page stacks its own overlay above the image
+// (Instagram covers every feed slide with a click-capture div): hit
+// testing routes all pointer events to the overlay, the image never
+// fires a boundary event, and a gate keyed on image events can never
+// reveal. The document sensor asks the engine's hit tester instead:
+// elementsFromPoint returns the full stack under the point — covered
+// elements included — so "the pointer is visually over this image" stays
+// answerable no matter what the page paints on top. Clipped or hidden
+// images are excluded by the same test, so an off-screen carousel slide
+// never reveals. Capture phase, because pages routinely stop propagation
+// at their own roots; no throttling, because Chrome already aligns
+// pointermove dispatch to the frame rate.
+
+let intentSensor: AbortController | null = null;
+
+/** Last pointer position in viewport coordinates — the coordinate space
+ * scrolling does not move, so a stationary pointer's entry stays valid
+ * across layout and scroll until the pointer next moves or leaves. */
+let lastPointer: { x: number; y: number } | null = null;
+
+function hitStackAt(x: number, y: number): Element[] {
+  // Absent only in non-browser test environments (jsdom).
+  return document.elementsFromPoint?.(x, y) ?? [];
+}
+
+/** True when the pointer's last known position sits over the image's
+ * painted, unclipped area — page overlays above it notwithstanding. The
+ * overlay-blind replacement for image.matches(":hover"), which follows
+ * the hovered element's ancestor chain and never includes a covered
+ * image. */
+function isImageUnderPointer(image: HTMLImageElement): boolean {
+  return (
+    lastPointer !== null &&
+    hitStackAt(lastPointer.x, lastPointer.y).includes(image)
+  );
+}
+
+function sensorNeeded(): boolean {
+  if (pending.size > 0) return true;
+  for (const entry of badges.values()) {
+    if (entry.gate) return true;
+  }
+  return false;
+}
+
+function processPointerAt(stack: Element[]): void {
+  for (const [image, entry] of badges) {
+    if (!entry.gate) continue;
+    if (stack.includes(image)) {
+      revealIntentBadge(entry);
+    } else if (entry.element.dataset["presence"] === "shown") {
+      scheduleIntentHide(image, entry);
+    }
+  }
+  for (const [image, entry] of pending) {
+    if (stack.includes(image)) {
+      revealPendingChip(image, entry);
+    } else if (entry.element) {
+      schedulePendingHide(entry);
+    }
+  }
+}
+
+function scheduleHideAll(): void {
+  for (const [image, entry] of badges) {
+    if (entry.gate && entry.element.dataset["presence"] === "shown") {
+      scheduleIntentHide(image, entry);
+    }
+  }
+  for (const entry of pending.values()) {
+    if (entry.element) schedulePendingHide(entry);
+  }
+}
+
+/** Installs the document-level sensor while any intent-gated entry
+ * exists, and removes it when the last one goes (§8: the overlay must be
+ * removable — nothing of ours may keep firing on a page with no badges).
+ * Called at every gate and pending-entry transition. */
+function syncIntentSensor(): void {
+  if (sensorNeeded() === (intentSensor !== null)) return;
+  if (intentSensor) {
+    intentSensor.abort();
+    intentSensor = null;
+    return;
+  }
+  intentSensor = new AbortController();
+  const { signal } = intentSensor;
+  const onPointer = (event: PointerEvent): void => {
+    lastPointer = { x: event.clientX, y: event.clientY };
+    processPointerAt(hitStackAt(event.clientX, event.clientY));
+  };
+  document.addEventListener("pointermove", onPointer, {
+    capture: true,
+    signal,
+  });
+  // Taps and clicks are intent too, and touch input can produce no
+  // pointermove at all before the tap lands.
+  document.addEventListener("pointerdown", onPointer, {
+    capture: true,
+    signal,
+  });
+  document.addEventListener(
+    "pointerout",
+    (event) => {
+      // A pointerout with no relatedTarget is the pointer leaving the
+      // document (window edge, or the device lifting): nothing is under
+      // it anymore.
+      if (event.relatedTarget !== null) return;
+      lastPointer = null;
+      scheduleHideAll();
+    },
+    { capture: true, signal },
+  );
+}
 
 function anyPendingChipVisible(): boolean {
   for (const entry of pending.values()) {
@@ -1035,19 +1155,13 @@ function schedulePendingHide(entry: PendingEntry): void {
 }
 
 /** Starts the intent-gated in-flight indicator for an image whose
- * analysis just began. No-op when the image already shows a verdict. */
+ * analysis just began. No-op when the image already shows a verdict.
+ * Pointer intent arrives through the shared document-level sensor — the
+ * same overlay-proof channel the Unknown gate uses. */
 export function markPending(image: HTMLImageElement): void {
   if (pending.has(image) || badges.has(image)) return;
-  const controller = new AbortController();
-  const entry: PendingEntry = { element: null, controller, hideTimer: null };
-  pending.set(image, entry);
-  const { signal } = controller;
-  const reveal = (): void => revealPendingChip(image, entry);
-  image.addEventListener("pointerenter", reveal, { signal });
-  image.addEventListener("pointermove", reveal, { signal });
-  image.addEventListener("pointerleave", () => schedulePendingHide(entry), {
-    signal,
-  });
+  pending.set(image, { element: null, hideTimer: null });
+  syncIntentSensor();
 }
 
 /** Ends the in-flight indicator. Returns true when its chip was visibly
@@ -1058,9 +1172,9 @@ export function clearPending(image: HTMLImageElement): boolean {
   if (!entry) return false;
   pending.delete(image);
   if (entry.hideTimer != null) clearTimeout(entry.hideTimer);
-  entry.controller.abort();
   const wasVisible = entry.element !== null;
   removePendingChip(entry);
+  syncIntentSensor();
   return wasVisible;
 }
 
@@ -1186,6 +1300,7 @@ export function removeBadgeFor(image: HTMLImageElement): void {
     entry.element.remove();
   }
   badges.delete(image);
+  syncIntentSensor();
 }
 
 /**
@@ -1304,10 +1419,9 @@ export function syncBadges(
 export function removeAllBadges(): void {
   for (const image of Array.from(pending.keys())) clearPending(image);
   closePopover();
-  // Tear down every intent gate: its listeners live on the page's own
-  // <img> elements, so removing the host alone would leave them firing
-  // reveals against detached badges for the page's lifetime — and a
-  // later re-enable would stack a second listener generation (§8: the
+  // Tear down every intent gate — its hide timers and badge-element
+  // listeners — so nothing keeps firing against detached badges, and a
+  // later re-enable never stacks a second listener generation (§8: the
   // overlay must be removable).
   for (const entry of badges.values()) {
     if (entry.gate) {
@@ -1320,4 +1434,7 @@ export function removeAllBadges(): void {
   shadowRoot = null;
   statusRegion = null;
   badges.clear();
+  // With no gated entries left, this removes the document-level sensor.
+  syncIntentSensor();
+  lastPointer = null;
 }

@@ -24,24 +24,6 @@ How to work the queue:
 
 ---
 
-## 1. Instagram field bug — queued
-
-**Goal:** badges don't appear on instagram.com (owner field report,
-2026-08-05); reproduce logged in, diagnose, fix or record why not.
-
-- Reddit works fine, so the 5.1 "shadow-DOM image discovery (Lit sites
-  like Reddit)" known-open item may be stale — confirm or retire it as
-  part of this chunk. Instagram is React (light DOM), so start from zero
-  assumptions.
-- Likely suspects to rule in/out: `blob:` URLs (worker fallback cannot
-  fetch those by design — see task 5.5 entry), srcset/wrapper markup the
-  discovery pass misses, the 96px min-size gate vs. Instagram's layout,
-  badge occlusion by stretched-link overlays (would look identical to
-  "no badge").
-- **Context:** DECISIONS.md 2026-07-26 (task 5.1, discovery + known-open
-  list), 2026-08-03 (task 5.5, acquisition ladder and blob: policy),
-  2026-08-04 (min-size gate raised to 96px).
-
 ## 2. Iframe scanning — queued
 
 **Goal:** scan images inside iframes (`all_frames: true`).
@@ -196,5 +178,8 @@ and the review-feedback loop.
   DECISIONS.md.
 
 ## Done
+
+1. Instagram field bug (intent gate blind under page overlays; Reddit
+   shadow-DOM item retired) — PR #12
 
 (Completed chunks land here as one-liners — `N. Title — PR #N`.)

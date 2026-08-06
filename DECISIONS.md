@@ -2832,3 +2832,115 @@ holds scope and context pointers only; reasoning stays here.
   declaration earlier in this ledger was scoped by the owner to in-page
   UI + wording only). The applied note says Phase 3's in-page work
   shipped and the rest is queued.
+
+## 2026-08-06 — Instagram field bug: intent gate was blind under page overlays (roadmap chunk 1)
+
+### The diagnosis (live, logged in)
+
+- **Report:** no badges anywhere on instagram.com (owner, 2026-08-05).
+- **What was actually happening:** everything upstream worked. Feed and
+  carousel images are plain light-DOM `<img>` elements with `https:`
+  scontent CDN srcs — discovery found them, the 96px gate passed them
+  (feed images are 468px+), acquisition and analysis completed without a
+  single console failure, and verdict badges rendered. But Instagram
+  strips metadata, so every verdict is **Unknown** — and Unknown badges
+  are intent-gated (owner decision 2026-08-05): hidden until
+  `pointerenter`/`pointermove` fires **on the img element**. Instagram
+  stacks an absolutely-positioned click-capture div over every feed
+  slide, so the img is never the hit-test target and those events never
+  fire — verified live with instrumented listeners (a real cursor wiggle
+  over a post: zero events on the img; the only `pointermove` target
+  document-wide was the overlay div). Badges sat permanently at
+  `opacity: 0`. Neutralizing the overlay's `pointer-events` for one
+  hover revealed the chip instantly, closing the causal loop.
+- **Suspects ruled out** (the roadmap's list): `blob:` URLs (feed is
+  all `https:`), srcset/wrapper discovery misses (badges rendered, so
+  discovery saw the images), the 96px gate (feed images are well past
+  it), and badge occlusion (nothing painted over our overlay; the badge
+  was invisible by its own gating).
+- **Same blindness, second site class:** the pending "checking" chip's
+  reveal listeners and both `image.matches(":hover")` guards (initial
+  presence, hide-timer hold) fail identically under overlays — `:hover`
+  follows the hovered element's ancestor chain, which never includes a
+  covered sibling image.
+
+### The fix: a shared document-level intent sensor (badge.ts)
+
+- **What:** the per-image `pointerenter`/`pointermove`/`pointerleave`
+  listeners are gone. One document-level capture-phase listener pair
+  (`pointermove` + `pointerdown` — taps are intent too) serves every
+  intent-gated entry: on each event it asks
+  `document.elementsFromPoint()` for the full hit stack under the
+  pointer and reveals any gated badge or pending chip whose image is in
+  the stack, scheduling the standard 200ms-grace hide for revealed
+  entries whose image is not. A `pointerout` with no `relatedTarget`
+  (pointer left the window) hides everything. The
+  `image.matches(":hover")` guards became the same hit-stack check
+  against the pointer's last position — viewport coordinates, which
+  scroll and layout cannot invalidate, re-hit-tested at fire time.
+- **Why elementsFromPoint:** it is the engine's own hit tester, and it
+  reports elements _underneath_ overlays (that is its purpose), while
+  excluding clipped or hidden ones — so "the pointer is visually over
+  this image" stays answerable no matter what the page paints on top,
+  and an off-screen carousel slide never reveals. Construction-correct
+  rather than site-specific: no Instagram selectors, no guessing which
+  div is an overlay.
+- **Cost posture:** the sensor installs only while a gated entry exists
+  and tears down with the last one (and in `removeAllBadges` — §8
+  removability). No rAF throttle: Chrome already aligns `pointermove`
+  dispatch to the frame rate, so the handler runs at most ~once per
+  frame, doing one `elementsFromPoint` walk plus Map iteration over the
+  handful of gated entries. Consistent with the standing-cost line drawn
+  at 5.1 (rAF re-anchoring loop rejected).
+- **Rejected:** listeners on the covering overlay or a positioned
+  ancestor (framework reconciliation churns those nodes; brittle,
+  site-shaped); per-gated-image `getBoundingClientRect` containment
+  checks per move (layout reads per event, and a rect check cannot see
+  clipping — it would reveal hidden carousel slides); revealing Unknown
+  unprompted on overlay sites (a policy change; the owner's intent-only
+  decision stands untouched — this fix changes the sensor, not the
+  policy).
+- **Behavior deltas, accepted:** continued pointer movement outside a
+  revealed badge's image keeps resetting the 200ms hide grace (hide
+  lands after movement pauses — marginally softer than the old
+  boundary-event hide); `pointerdown` now counts as reveal intent
+  (previously touch reveal rode on pointerenter quirks). `PendingEntry`
+  lost its per-image AbortController — the sensor is the only pointer
+  channel for chips now.
+- **Semantics preserved:** scrolling still reveals nothing until the
+  first in-image pointer move (scroll fires no pointer events — the
+  5.1-era finding stands); badge-element hover/focus listeners stay
+  (our overlay outpaints page UI, so they were never blind);
+  DESIGN.md's presence contract ("pointer entering or moving on the
+  image") is unchanged at the level it specifies.
+
+### Verification
+
+- Unit: intent-gate and pending suites rewritten against the sensor
+  (scripted `elementsFromPoint` stacks — jsdom has no hit tester), with
+  two new regression pins: reveal-through-overlay (the Instagram case:
+  event target is the overlay, image only in the stack) and
+  no-reveal-for-stack-absent images (the clipped-slide case). 240
+  tests, typecheck, Prettier all green.
+- Live: on instagram.com (logged in, extension rebuilt and reloaded) the
+  Unknown chip now reveals through the intact overlay on hover and
+  fades on move-away; test-page baseline intact — ai_declared badges
+  unprompted, ai_expired badges "AI — likely" unprompted, C.jpg's
+  Unknown reveals on plain hover.
+- Session note: the first reproduction pass found no badges because the
+  extension was _disabled_ in the browser — worth checking before
+  diagnosing (the test-page baseline catches it in one load).
+
+### Reddit shadow-DOM known-open item: retired (stale)
+
+- The 5.1 known-open list flagged shadow-DOM image discovery with
+  "Lit sites like Reddit" as the motivating case. Checked live on
+  reddit.com (r/EarthPorn): all 56 content-sized images are slotted
+  **light DOM** children of the shreddit web components —
+  `document.images` finds every one, and badges work (owner report
+  matches). The only images inside shadow roots are 0–32px chrome
+  (community icons, nav assets), all below the 96px gate even if
+  discovery could see them. The abstract gap — a site authoring
+  content-sized images inside shadow roots — remains real but has no
+  known real-site instance; it stops being a tracked known-open item
+  until one appears.

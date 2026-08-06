@@ -82,10 +82,38 @@ function pointerDownOn(target: EventTarget): void {
   );
 }
 
+// The intent sensor asks document.elementsFromPoint what sits under the
+// pointer (jsdom has no hit tester, so the stack is scripted per test).
+// movePointer stands in for real cursor movement: the dispatch target is
+// whatever the page would hit-test first — the image, or a page overlay
+// covering it — while the scripted stack is what the engine would report
+// beneath the point.
+let pointerStack: Element[] = [];
+
+beforeEach(() => {
+  pointerStack = [];
+  document.elementsFromPoint = vi.fn(() => pointerStack);
+});
+
+function movePointer(
+  over: Element[],
+  target: EventTarget = document.body,
+): void {
+  pointerStack = over;
+  target.dispatchEvent(
+    new MouseEvent("pointermove", { bubbles: true, clientX: 40, clientY: 40 }),
+  );
+}
+
+function pointerExitsWindow(): void {
+  document.body.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
+}
+
 afterEach(() => {
   removeAllBadges();
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(document, "elementsFromPoint");
 });
 
 describe("renderBadge", () => {
@@ -627,35 +655,60 @@ describe("removal", () => {
 
 // Owner decision 2026-08-05 (DECISIONS.md, Phase 3 ask round): Unknown
 // badges render on intent only; strong verdicts assert unprompted.
+// Pointer intent arrives through the shared document-level sensor
+// (elementsFromPoint hit stacks), not listeners on the image — pages that
+// cover their images with overlays starve the image of pointer events
+// entirely (the Instagram field bug, 2026-08-06).
 describe("intent-gated presence", () => {
-  it("hides Unknown badges until the reader hovers the image, then re-hides", () => {
+  it("hides Unknown badges until the pointer is over the image, then re-hides", () => {
     vi.useFakeTimers();
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("unknown"), image.src);
     const badge = badgeElements()[0]!;
     expect(badge.dataset["presence"]).toBe("hidden");
 
-    image.dispatchEvent(new Event("pointerenter"));
+    movePointer([image]);
     expect(badge.dataset["presence"]).toBe("shown");
 
-    image.dispatchEvent(new Event("pointerleave"));
+    movePointer([]);
     vi.runAllTimers();
     expect(badge.dataset["presence"]).toBe("hidden");
     vi.useRealTimers();
+  });
+
+  it("reveals through a page overlay covering the image (Instagram field bug)", () => {
+    // Instagram stacks a click-capture div over every feed slide: all
+    // pointer events target the overlay and the image never fires a
+    // boundary event. The sensor must reveal from the hit stack — which
+    // includes covered elements — not from the event's target.
+    const image = makeImage("https://example.com/covered.jpg");
+    const overlay = document.createElement("div");
+    document.body.append(overlay);
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+
+    movePointer([overlay, image], overlay);
+    expect(badge.dataset["presence"]).toBe("shown");
+  });
+
+  it("does not reveal an image absent from the hit stack (clipped carousel slide)", () => {
+    // The off-screen neighbor of a carousel's visible slide is connected
+    // and full-size but clipped away; the engine's hit stack excludes it,
+    // so pointer traffic elsewhere must not reveal its badge.
+    const visible = makeImage("https://example.com/visible.jpg");
+    const clipped = makeImage("https://example.com/clipped.jpg");
+    renderBadge(visible, wire("unknown"), visible.src);
+    renderBadge(clipped, wire("unknown"), clipped.src);
+
+    movePointer([visible]);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+    expect(badgeElements()[1]?.dataset["presence"]).toBe("hidden");
   });
 
   it("never gates strong verdicts", () => {
     const image = makeImage("https://example.com/b.jpg");
     renderBadge(image, wire("ai-declared"), image.src);
     expect(badgeElements()[0]?.dataset["presence"]).toBeUndefined();
-  });
-
-  it("reveals on pointer movement within the image — scrolling can bring an image under a stationary cursor without any boundary event", () => {
-    const image = makeImage("https://example.com/scrolled.jpg");
-    renderBadge(image, wire("unknown"), image.src);
-    const badge = badgeElements()[0]!;
-    image.dispatchEvent(new Event("pointermove"));
-    expect(badge.dataset["presence"]).toBe("shown");
   });
 
   it("reveals when keyboard focus reaches the badge", () => {
@@ -671,9 +724,9 @@ describe("intent-gated presence", () => {
     const image = makeImage("https://example.com/d.jpg");
     renderBadge(image, wire("unknown"), image.src);
     const badge = badgeElements()[0]!;
-    image.dispatchEvent(new Event("pointerenter"));
+    movePointer([image]);
     badge.click();
-    image.dispatchEvent(new Event("pointerleave"));
+    movePointer([]);
     vi.runAllTimers();
     expect(badge.dataset["presence"]).toBe("shown");
     vi.useRealTimers();
@@ -701,42 +754,55 @@ describe("intent-gated presence", () => {
   });
 
   it("holds the reveal under a pointer resting on the image, not just the badge", () => {
-    // A hide scheduled by the pending handoff (or a popover close) fires
-    // while the pointer sits mid-image: without the image's own hover in
-    // the guard, the badge blinks out with no boundary event left to
-    // re-reveal it. jsdom has no :hover state — the mock stands in for
-    // the stationary pointer.
+    // A hide scheduled by a popover close (or the pending handoff) fires
+    // while the pointer sits mid-image with no further movement: the
+    // fire-time guard re-checks the hit stack at the pointer's last
+    // position, which scrolling and layout cannot invalidate (viewport
+    // coordinates).
     vi.useFakeTimers();
     const image = makeImage("https://example.com/rest.jpg");
     markPending(image);
-    image.dispatchEvent(new Event("pointermove"));
+    movePointer([image]);
     renderBadge(image, wire("unknown"), image.src);
     const badge = badgeElements()[0]!;
     expect(badge.dataset["presence"]).toBe("shown");
 
-    const matches = vi.spyOn(image, "matches");
-    matches.mockReturnValue(true);
+    // Open and light-dismiss the popover: the close schedules a hide
+    // that lands under the stationary pointer.
+    badge.click();
+    pointerDownOn(document.body);
     vi.runAllTimers();
     expect(badge.dataset["presence"]).toBe("shown");
 
-    // The pointer finally leaves: the ordinary boundary hide applies.
-    matches.mockReturnValue(false);
-    image.dispatchEvent(new Event("pointerleave"));
+    // The pointer finally moves off: the ordinary hide applies.
+    movePointer([]);
     vi.runAllTimers();
     expect(badge.dataset["presence"]).toBe("hidden");
     vi.useRealTimers();
   });
 
-  it("removeAllBadges tears down the intent-gate listeners on the page's images", () => {
+  it("hides revealed badges when the pointer leaves the window", () => {
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/exit.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    movePointer([image]);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+
+    pointerExitsWindow();
+    vi.runAllTimers();
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
+  });
+
+  it("removeAllBadges tears down the document-level intent sensor", () => {
     const image = makeImage("https://example.com/gone.jpg");
     renderBadge(image, wire("unknown"), image.src);
     const badge = badgeElements()[0]!;
     removeAllBadges();
-    // The reveal listeners live on the page's own <img> (§8: the overlay
-    // must be removable); without the abort they would keep firing
-    // against the detached badge for the page's lifetime.
-    image.dispatchEvent(new Event("pointerenter"));
-    image.dispatchEvent(new Event("pointermove"));
+    // The sensor listens on the document (§8: the overlay must be
+    // removable); without the teardown it would keep hit-testing and
+    // firing reveals against detached badges for the page's lifetime.
+    movePointer([image]);
     expect(badge.dataset["presence"]).toBe("hidden");
   });
 });
@@ -750,7 +816,7 @@ describe("pending indicator", () => {
     // No host yet: the chip (and the whole overlay) exists only on intent.
     expect(overlayRoot?.querySelector(".badge.pending") ?? null).toBeNull();
 
-    image.dispatchEvent(new Event("pointermove"));
+    movePointer([image]);
     const chip = overlayRoot?.querySelector(".badge.pending");
     expect(chip?.getAttribute("role")).toBe("status");
     expect(chip?.querySelector(".ring")?.getAttribute("data-ring")).toBe(
@@ -764,10 +830,20 @@ describe("pending indicator", () => {
     expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
   });
 
+  it("reveals the chip through a page overlay covering the image", () => {
+    // Same overlay-proof channel as the Unknown gate (Instagram bug).
+    const image = makeImage("https://example.com/covered-slow.jpg");
+    const overlay = document.createElement("div");
+    document.body.append(overlay);
+    markPending(image);
+    movePointer([overlay, image], overlay);
+    expect(overlayRoot?.querySelector(".badge.pending")).not.toBeNull();
+  });
+
   it("clears silently when analysis fails without a verdict", () => {
     const image = makeImage("https://example.com/broken.jpg");
     markPending(image);
-    image.dispatchEvent(new Event("pointerenter"));
+    movePointer([image]);
     expect(overlayRoot?.querySelector(".badge.pending")).not.toBeNull();
     clearPending(image);
     expect(overlayRoot?.querySelector(".badge.pending")).toBeNull();
@@ -776,7 +852,7 @@ describe("pending indicator", () => {
   it("joins the sync pass: chips reposition and reap like badges", () => {
     const image = makeImage("https://example.com/slow.jpg");
     markPending(image);
-    image.dispatchEvent(new Event("pointermove"));
+    movePointer([image]);
     const chip = overlayRoot?.querySelector<HTMLElement>(".badge.pending");
     expect(chip?.style.left).toBe("18px");
 
@@ -801,7 +877,7 @@ describe("pending indicator", () => {
     // region takes the text instead.
     const image = makeImage("https://example.com/slow.jpg");
     markPending(image);
-    image.dispatchEvent(new Event("pointermove"));
+    movePointer([image]);
     const region = overlayRoot?.querySelector('[role="status"]:not(.badge)');
     expect(region?.textContent).toBe("Checking this image…");
     clearPending(image);
