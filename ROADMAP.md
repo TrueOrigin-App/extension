@@ -107,6 +107,22 @@ parsing; fixtures for Gemini-class output.
   parameters block — the 2026-08-04 entry flags this).
 - **Context:** same entry as chunk 5, plus part 1's recorded decisions.
 
+## 11. Intent-sensor pointermove cost: rect prefilter — queued
+
+**Goal:** stop running `document.elementsFromPoint` unconditionally on
+every `pointermove`/`pointerdown` — a layout-dependent read that forces
+a synchronous style+layout flush whenever the page has dirtied layout,
+a per-frame jank risk on SPA feeds (all-Unknown pages keep the sensor
+installed for the page's lifetime).
+
+- Design constraint from the PR #12 review: a cached-rect AABB prefilter
+  is only sound with fresh rects — syncBadges rects lag scroll by up to
+  a frame and never see pure-transform animations, so a naive prefilter
+  suppresses legitimate reveals. Needs a staleness escape (e.g. on a
+  rect miss, fall through to the real hit test at most once per frame).
+- **Context:** DECISIONS.md 2026-08-06 (review fix wave — "Recorded,
+  not fixed here" carries the flush profile and the constraint).
+
 ## 7. README — queued
 
 **Goal:** public-repo landing page: what TrueOrigin is, the verdict
@@ -154,6 +170,13 @@ and the review-feedback loop.
   self-signed material by design.
 - **CSS-animation badge re-anchoring gap** (5.1 known-open): no real-site
   report yet; folds into whichever field-bug chunk hits it.
+- **`pointer-events: none` images** (PR #12 review): an image with
+  `pointer-events: none` — its own or inherited (the
+  `img { pointer-events: none }` drag-protection pattern) — is invisible
+  to `elementsFromPoint`, so its intent-gated badge reveals only via
+  keyboard focus. No field report yet; folds into whichever field-bug
+  chunk hits it. DECISIONS.md 2026-08-06 (review fix wave) records the
+  limit.
 - **`ai_declared.png` cert-expiry CI tripwire:** fires on its own
   schedule; when it does, update the Trusted/ai-declared test
   expectations (product behavior already handled — see 2026-08-04

@@ -87,22 +87,46 @@ function pointerDownOn(target: EventTarget): void {
 // movePointer stands in for real cursor movement: the dispatch target is
 // whatever the page would hit-test first — the image, or a page overlay
 // covering it — while the scripted stack is what the engine would report
-// beneath the point.
-let pointerStack: Element[] = [];
+// beneath the point. Multi-pointer tests script hitStacks per coordinate
+// instead, since the sensor tracks hover and touch points separately and
+// re-probes each at its own position.
+let hitStacks: (x: number, y: number) => Element[];
 
 beforeEach(() => {
-  pointerStack = [];
-  document.elementsFromPoint = vi.fn(() => pointerStack);
+  hitStacks = () => [];
+  document.elementsFromPoint = vi.fn((x: number, y: number) => hitStacks(x, y));
 });
 
 function movePointer(
   over: Element[],
   target: EventTarget = document.body,
 ): void {
-  pointerStack = over;
+  hitStacks = () => over;
   target.dispatchEvent(
     new MouseEvent("pointermove", { bubbles: true, clientX: 40, clientY: 40 }),
   );
+}
+
+/** Raw pointer-event dispatch for the sensor's per-pointer-type paths.
+ * jsdom's PointerEvent support is incomplete, so pointerType rides on a
+ * MouseEvent the same way animationName does elsewhere in this file. */
+function dispatchPointer(
+  type: string,
+  init: {
+    x?: number;
+    y?: number;
+    pointerType?: string;
+    relatedTarget?: Element;
+  } = {},
+): void {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    clientX: init.x ?? 40,
+    clientY: init.y ?? 40,
+    relatedTarget: init.relatedTarget ?? null,
+  });
+  if (init.pointerType) Object.assign(event, { pointerType: init.pointerType });
+  document.body.dispatchEvent(event);
 }
 
 function pointerExitsWindow(): void {
@@ -794,16 +818,217 @@ describe("intent-gated presence", () => {
     vi.useRealTimers();
   });
 
-  it("removeAllBadges tears down the document-level intent sensor", () => {
+  it("removeAllBadges tears down the window-level intent sensor", () => {
     const image = makeImage("https://example.com/gone.jpg");
     renderBadge(image, wire("unknown"), image.src);
     const badge = badgeElements()[0]!;
     removeAllBadges();
-    // The sensor listens on the document (§8: the overlay must be
+    // The sensor listens on the window (§8: the overlay must be
     // removable); without the teardown it would keep hit-testing and
     // firing reveals against detached badges for the page's lifetime.
     movePointer([image]);
     expect(badge.dataset["presence"]).toBe("hidden");
+  });
+
+  it("keeps a touch tap's reveal past the lift, until the next tap lands elsewhere", () => {
+    // A tap's trailing pointerout (relatedTarget null on touch lift) must
+    // not clear the touch point: the badge would hide 200ms after every
+    // tap — before the second tap that opens the popover, touch's only
+    // path in. The point is sticky past lift, like Chrome's post-tap
+    // :hover that held the old per-image gate.
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/tapped.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    hitStacks = (x) => (x === 40 ? [image] : []);
+
+    dispatchPointer("pointerdown", { x: 40, y: 40, pointerType: "touch" });
+    expect(badge.dataset["presence"]).toBe("shown");
+    dispatchPointer("pointerout", { pointerType: "touch" });
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("shown");
+
+    // Intent moves on: the next tap lands elsewhere and the reveal fades.
+    dispatchPointer("pointerdown", { x: 300, y: 300, pointerType: "touch" });
+    dispatchPointer("pointerout", { pointerType: "touch" });
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
+  });
+
+  it("keeps a mouse-held reveal when an unrelated touch taps elsewhere", () => {
+    // Hover and touch points are tracked separately: with a single shared
+    // slot, the tap's pointerdown overwrites — and its lift nulls — the
+    // state holding the mouse reveal, hiding the badge under a
+    // stationary cursor with no boundary event left to re-reveal it.
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/mouse-held.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    hitStacks = (x) => (x === 40 ? [image] : []);
+
+    dispatchPointer("pointermove", { x: 40, y: 40 });
+    expect(badge.dataset["presence"]).toBe("shown");
+    dispatchPointer("pointerdown", { x: 300, y: 300, pointerType: "touch" });
+    dispatchPointer("pointerout", { pointerType: "touch" });
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("shown");
+    vi.useRealTimers();
+  });
+
+  it("lets go of the touch point when the touch becomes a scroll (pointercancel)", () => {
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/flicked.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    hitStacks = (x) => (x === 40 ? [image] : []);
+
+    dispatchPointer("pointerdown", { x: 40, y: 40, pointerType: "touch" });
+    expect(badge.dataset["presence"]).toBe("shown");
+    // The flick turns into a scroll: no tap intent, no sticky point.
+    dispatchPointer("pointercancel", { pointerType: "touch" });
+    dispatchPointer("pointerout", { pointerType: "touch" });
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
+  });
+
+  it("hides the reveal when the pointer crosses into an iframe", () => {
+    // Entering a cross-document iframe fires pointerout with the iframe
+    // as relatedTarget — and then no further pointer events reach this
+    // document. Without treating that as "pointer gone", the reveal sits
+    // pinned open for as long as the reader works inside the frame.
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/by-iframe.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    movePointer([image]);
+    expect(badge.dataset["presence"]).toBe("shown");
+
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    dispatchPointer("pointerout", { relatedTarget: iframe });
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
+  });
+
+  it("shows a fresh Unknown badge under a resting cursor (:hover fallback)", () => {
+    // Page loads with the cursor already on the image and the verdict
+    // lands before any pointer event: the event-fed points know nothing,
+    // and the browser's own hover chain is the only truth available.
+    const image = makeImage("https://example.com/resting.jpg");
+    vi.spyOn(image, "matches").mockImplementation(
+      (selector) => selector === ":hover",
+    );
+    renderBadge(image, wire("unknown"), image.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+  });
+
+  it("forgets the pointer when the last gated entry goes (no stale reveal)", () => {
+    // Sensor teardown must clear the tracked points: movement while no
+    // sensor listens is untracked, and a later gate consulting a stale
+    // point would reveal a badge — unprompted — for whatever image an
+    // infinite-scroll feed later places under it.
+    const image = makeImage("https://example.com/reaped.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    movePointer([image]);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+
+    removeBadgeFor(image);
+    const next = makeImage("https://example.com/newly-under-point.jpg");
+    hitStacks = () => [next];
+    renderBadge(next, wire("unknown"), next.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("hidden");
+  });
+
+  it("does not reveal images beneath the overlay's own pixels (open panel)", () => {
+    // Pointer traffic over the open popover hit-tests the stack beneath
+    // it; revealing those badges would strobe the panel's surroundings
+    // while the reader merely moves down the text. A stack topped by the
+    // overlay host (the retargeted shadow-tree hit) reads as empty.
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/open-panel.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    movePointer([image]);
+    badgeElements()[0]!.click();
+    const beneath = makeImage("https://example.com/beneath-panel.jpg");
+    renderBadge(beneath, wire("unknown"), beneath.src);
+    expect(badgeElements()[1]?.dataset["presence"]).toBe("hidden");
+
+    movePointer([host()!, beneath]);
+    vi.runAllTimers();
+    expect(badgeElements()[1]?.dataset["presence"]).toBe("hidden");
+    // The panel's own image stays held by the open popover.
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+    vi.useRealTimers();
+  });
+
+  it("reveals only the topmost image of a stacked pair (buried placeholder)", () => {
+    // elementsFromPoint includes images fully covered by other images
+    // (LQIP placeholders, crossfading carousel frames); the reader is
+    // looking at the topmost one, and revealing both would pile two
+    // chips on the same anchor.
+    const top = makeImage("https://example.com/final.jpg");
+    const buried = makeImage("https://example.com/placeholder.jpg");
+    renderBadge(top, wire("unknown"), top.src);
+    renderBadge(buried, wire("unknown"), buried.src);
+
+    movePointer([top, buried]);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+    expect(badgeElements()[1]?.dataset["presence"]).toBe("hidden");
+  });
+
+  it("hands the reveal past an opacity-hidden frame to the visible image beneath", () => {
+    // A crossfade that parks its settled-out frame at opacity: 0 above
+    // the active one: the ghost still hit-tests (opacity does not affect
+    // hit testing), but the reader is looking at the frame beneath it.
+    // checkVisibility is the engine's own opacity walk; this jsdom does
+    // not implement it (the sensor's ?. guard degrades to topmost-wins),
+    // so both answers are scripted by assignment rather than spyOn.
+    const ghost = makeImage("https://example.com/settled-out.jpg");
+    const active = makeImage("https://example.com/active-frame.jpg");
+    renderBadge(ghost, wire("unknown"), ghost.src);
+    renderBadge(active, wire("unknown"), active.src);
+    ghost.checkVisibility = () => false;
+    active.checkVisibility = () => true;
+
+    movePointer([ghost, active]);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("hidden");
+    expect(badgeElements()[1]?.dataset["presence"]).toBe("shown");
+  });
+
+  it("reveals a landing Unknown under the pointer with no pending chip (held path)", () => {
+    // Kills a mutation the suite previously masked: with the pointer on
+    // the image and no chip ever visible, only syncIntentGate's
+    // reader-engagement check can show the badge — the reveal-continuity
+    // block needs a visible chip and cannot fire here.
+    const other = makeImage("https://example.com/keeps-sensor.jpg");
+    markPending(other);
+    const image = makeImage("https://example.com/no-chip.jpg");
+    movePointer([image]);
+    renderBadge(image, wire("unknown"), image.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("shown");
+  });
+
+  it("keeps a chip-watched verdict revealed when it lands just after the pointer left", () => {
+    // The complementary mutation: pointer moved off during the hide
+    // grace, chip still visible, verdict lands — only renderBadge's
+    // reveal-continuity block can carry the reveal (the engagement check
+    // is false), and it must hand off into the ordinary grace hide
+    // rather than blinking out or sticking forever.
+    vi.useFakeTimers();
+    const image = makeImage("https://example.com/grace-window.jpg");
+    markPending(image);
+    movePointer([image]);
+    movePointer([]);
+    renderBadge(image, wire("unknown"), image.src);
+    const badge = badgeElements()[0]!;
+    expect(badge.dataset["presence"]).toBe("shown");
+
+    vi.runAllTimers();
+    expect(badge.dataset["presence"]).toBe("hidden");
+    vi.useRealTimers();
   });
 });
 
