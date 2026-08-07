@@ -24,24 +24,6 @@ How to work the queue:
 
 ---
 
-## 1. Instagram field bug — queued
-
-**Goal:** badges don't appear on instagram.com (owner field report,
-2026-08-05); reproduce logged in, diagnose, fix or record why not.
-
-- Reddit works fine, so the 5.1 "shadow-DOM image discovery (Lit sites
-  like Reddit)" known-open item may be stale — confirm or retire it as
-  part of this chunk. Instagram is React (light DOM), so start from zero
-  assumptions.
-- Likely suspects to rule in/out: `blob:` URLs (worker fallback cannot
-  fetch those by design — see task 5.5 entry), srcset/wrapper markup the
-  discovery pass misses, the 96px min-size gate vs. Instagram's layout,
-  badge occlusion by stretched-link overlays (would look identical to
-  "no badge").
-- **Context:** DECISIONS.md 2026-07-26 (task 5.1, discovery + known-open
-  list), 2026-08-03 (task 5.5, acquisition ladder and blob: policy),
-  2026-08-04 (min-size gate raised to 96px).
-
 ## 2. Iframe scanning — queued
 
 **Goal:** scan images inside iframes (`all_frames: true`).
@@ -125,6 +107,22 @@ parsing; fixtures for Gemini-class output.
   parameters block — the 2026-08-04 entry flags this).
 - **Context:** same entry as chunk 5, plus part 1's recorded decisions.
 
+## 11. Intent-sensor pointermove cost: rect prefilter — queued
+
+**Goal:** stop running `document.elementsFromPoint` unconditionally on
+every `pointermove`/`pointerdown` — a layout-dependent read that forces
+a synchronous style+layout flush whenever the page has dirtied layout,
+a per-frame jank risk on SPA feeds (all-Unknown pages keep the sensor
+installed for the page's lifetime).
+
+- Design constraint from the PR #12 review: a cached-rect AABB prefilter
+  is only sound with fresh rects — syncBadges rects lag scroll by up to
+  a frame and never see pure-transform animations, so a naive prefilter
+  suppresses legitimate reveals. Needs a staleness escape (e.g. on a
+  rect miss, fall through to the real hit test at most once per frame).
+- **Context:** DECISIONS.md 2026-08-06 (review fix wave — "Recorded,
+  not fixed here" carries the flush profile and the constraint).
+
 ## 7. README — queued
 
 **Goal:** public-repo landing page: what TrueOrigin is, the verdict
@@ -172,6 +170,20 @@ and the review-feedback loop.
   self-signed material by design.
 - **CSS-animation badge re-anchoring gap** (5.1 known-open): no real-site
   report yet; folds into whichever field-bug chunk hits it.
+- **Touch-path live soak** (PR #12 review fix wave): the sticky-tap
+  flow — tap reveals the Unknown badge, reveal survives the lift, second
+  tap opens the popover, next tap elsewhere fades it — is pinned in
+  jsdom only; no touch hardware has exercised it. Verify on a real touch
+  device or DevTools touch emulation (the claude-in-chrome scroll tool
+  cannot synthesize touch) next live session. DECISIONS.md 2026-08-06
+  (review fix wave, sticky touch point) records the expected sequences.
+- **`pointer-events: none` images** (PR #12 review): an image with
+  `pointer-events: none` — its own or inherited (the
+  `img { pointer-events: none }` drag-protection pattern) — is invisible
+  to `elementsFromPoint`, so its intent-gated badge reveals only via
+  keyboard focus. No field report yet; folds into whichever field-bug
+  chunk hits it. DECISIONS.md 2026-08-06 (review fix wave) records the
+  limit.
 - **`ai_declared.png` cert-expiry CI tripwire:** fires on its own
   schedule; when it does, update the Trusted/ai-declared test
   expectations (product behavior already handled — see 2026-08-04
@@ -196,5 +208,8 @@ and the review-feedback loop.
   DECISIONS.md.
 
 ## Done
+
+1. Instagram field bug (intent gate blind under page overlays; Reddit
+   shadow-DOM item retired) — PR #12
 
 (Completed chunks land here as one-liners — `N. Title — PR #N`.)

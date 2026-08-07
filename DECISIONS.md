@@ -2832,3 +2832,299 @@ holds scope and context pointers only; reasoning stays here.
   declaration earlier in this ledger was scoped by the owner to in-page
   UI + wording only). The applied note says Phase 3's in-page work
   shipped and the rest is queued.
+
+## 2026-08-06 — Instagram field bug: intent gate was blind under page overlays (roadmap chunk 1)
+
+### The diagnosis (live, logged in)
+
+- **Report:** no badges anywhere on instagram.com (owner, 2026-08-05).
+- **What was actually happening:** everything upstream worked. Feed and
+  carousel images are plain light-DOM `<img>` elements with `https:`
+  scontent CDN srcs — discovery found them, the 96px gate passed them
+  (feed images are 468px+), acquisition and analysis completed without a
+  single console failure, and verdict badges rendered. But Instagram
+  strips metadata, so every verdict is **Unknown** — and Unknown badges
+  are intent-gated (owner decision 2026-08-05): hidden until
+  `pointerenter`/`pointermove` fires **on the img element**. Instagram
+  stacks an absolutely-positioned click-capture div over every feed
+  slide, so the img is never the hit-test target and those events never
+  fire — verified live with instrumented listeners (a real cursor wiggle
+  over a post: zero events on the img; the only `pointermove` target
+  document-wide was the overlay div). Badges sat permanently at
+  `opacity: 0`. Neutralizing the overlay's `pointer-events` for one
+  hover revealed the chip instantly, closing the causal loop.
+- **Suspects ruled out** (the roadmap's list): `blob:` URLs (feed is
+  all `https:`), srcset/wrapper discovery misses (badges rendered, so
+  discovery saw the images), the 96px gate (feed images are well past
+  it), and badge occlusion (nothing painted over our overlay; the badge
+  was invisible by its own gating).
+- **Same blindness, second site class:** the pending "checking" chip's
+  reveal listeners and both `image.matches(":hover")` guards (initial
+  presence, hide-timer hold) fail identically under overlays — `:hover`
+  follows the hovered element's ancestor chain, which never includes a
+  covered sibling image.
+
+### The fix: a shared document-level intent sensor (badge.ts)
+
+- **What:** the per-image `pointerenter`/`pointermove`/`pointerleave`
+  listeners are gone. One document-level capture-phase listener pair
+  (`pointermove` + `pointerdown` — taps are intent too) serves every
+  intent-gated entry: on each event it asks
+  `document.elementsFromPoint()` for the full hit stack under the
+  pointer and reveals any gated badge or pending chip whose image is in
+  the stack, scheduling the standard 200ms-grace hide for revealed
+  entries whose image is not. A `pointerout` with no `relatedTarget`
+  (pointer left the window) hides everything. The
+  `image.matches(":hover")` guards became the same hit-stack check
+  against the pointer's last position — viewport coordinates, which
+  scroll and layout cannot invalidate, re-hit-tested at fire time.
+- **Why elementsFromPoint:** it is the engine's own hit tester, and it
+  reports elements _underneath_ overlays (that is its purpose), while
+  excluding clipped or hidden ones — so "the pointer is visually over
+  this image" stays answerable no matter what the page paints on top,
+  and an off-screen carousel slide never reveals. Construction-correct
+  rather than site-specific: no Instagram selectors, no guessing which
+  div is an overlay.
+- **Cost posture:** the sensor installs only while a gated entry exists
+  and tears down with the last one (and in `removeAllBadges` — §8
+  removability). No rAF throttle: Chrome already aligns `pointermove`
+  dispatch to the frame rate, so the handler runs at most ~once per
+  frame, doing one `elementsFromPoint` walk plus Map iteration over the
+  handful of gated entries. Consistent with the standing-cost line drawn
+  at 5.1 (rAF re-anchoring loop rejected).
+- **Rejected:** listeners on the covering overlay or a positioned
+  ancestor (framework reconciliation churns those nodes; brittle,
+  site-shaped); per-gated-image `getBoundingClientRect` containment
+  checks per move (layout reads per event, and a rect check cannot see
+  clipping — it would reveal hidden carousel slides); revealing Unknown
+  unprompted on overlay sites (a policy change; the owner's intent-only
+  decision stands untouched — this fix changes the sensor, not the
+  policy).
+- **Behavior deltas, accepted:** continued pointer movement outside a
+  revealed badge's image keeps resetting the 200ms hide grace (hide
+  lands after movement pauses — marginally softer than the old
+  boundary-event hide); `pointerdown` now counts as reveal intent
+  (previously touch reveal rode on pointerenter quirks). `PendingEntry`
+  lost its per-image AbortController — the sensor is the only pointer
+  channel for chips now.
+- **Semantics preserved:** scrolling still reveals nothing until the
+  first in-image pointer move (scroll fires no pointer events — the
+  5.1-era finding stands); badge-element hover/focus listeners stay
+  (our overlay outpaints page UI, so they were never blind);
+  DESIGN.md's presence contract ("pointer entering or moving on the
+  image") is unchanged at the level it specifies.
+
+> **Corrections (2026-08-06, PR #12 review — see the review fix wave
+> entry below):** three claims above overstate. "Answerable no matter
+> what the page paints on top" — not for images with
+> `pointer-events: none` (own or inherited): hit testing skips them
+> entirely, so their gated badges reveal only via keyboard focus
+> (residual site class, now a ROADMAP parked item). "Construction-
+> correct" — `document.elementsFromPoint` also retargets shadow-tree
+> hits to the host, so a gated image inside a shadow root could never
+> match; moot while discovery is light-DOM-only, but binding on whoever
+> adds shadow discovery. And the cost note ("one elementsFromPoint walk
+> plus Map iteration") omits that a layout-dependent read forces a
+> synchronous style+layout flush whenever the page has dirtied layout —
+> per-frame jank risk on SPA feeds, queued as its own roadmap chunk.
+> The single-slot `lastPointer` this fix introduced also carried a
+> family of state-staleness bugs (touch, multi-pointer, iframe exit,
+> teardown); the fix-wave entry records their repair.
+
+### Verification
+
+- Unit: intent-gate and pending suites rewritten against the sensor
+  (scripted `elementsFromPoint` stacks — jsdom has no hit tester), with
+  two new regression pins: reveal-through-overlay (the Instagram case:
+  event target is the overlay, image only in the stack) and
+  no-reveal-for-stack-absent images (the clipped-slide case). 240
+  tests, typecheck, Prettier all green.
+- Live: on instagram.com (logged in, extension rebuilt and reloaded) the
+  Unknown chip now reveals through the intact overlay on hover and
+  fades on move-away; test-page baseline intact — ai_declared badges
+  unprompted, ai_expired badges "AI — likely" unprompted, C.jpg's
+  Unknown reveals on plain hover.
+- Session note: the first reproduction pass found no badges because the
+  extension was _disabled_ in the browser — worth checking before
+  diagnosing (the test-page baseline catches it in one load).
+
+### Reddit shadow-DOM known-open item: retired (stale)
+
+- The 5.1 known-open list flagged shadow-DOM image discovery with
+  "Lit sites like Reddit" as the motivating case. Checked live on
+  reddit.com (r/EarthPorn): all 56 content-sized images are slotted
+  **light DOM** children of the shreddit web components —
+  `document.images` finds every one, and badges work (owner report
+  matches). The only images inside shadow roots are 0–32px chrome
+  (community icons, nav assets), all below the 96px gate even if
+  discovery could see them. The abstract gap — a site authoring
+  content-sized images inside shadow roots — remains real but has no
+  known real-site instance; it stops being a tracked known-open item
+  until one appears.
+
+## 2026-08-06 — PR #12 review fix wave: per-pointer state, sticky touch, sensor hardening
+
+An xhigh-effort review of PR #12 (12 adversarially verified findings)
+confirmed that replacing browser-maintained `:hover` truth with a single
+event-fed `lastPointer` slot introduced a family of state-staleness bugs.
+This wave repairs them on the same PR. All decisions below were free
+choices under §8.
+
+### Per-pointer-type state: `hoverPoint` + `touchPoint`
+
+- **What:** the single `lastPointer` became two slots — `hoverPoint`
+  (mouse/pen) and `touchPoint` — keyed on `event.pointerType`.
+  `isImageUnderPointer` probes each at its own coordinates.
+- **Why:** boundary events are per-pointer, state was not: an unrelated
+  touch tap overwrote — and on lift, nulled — the point holding a mouse
+  reveal, hiding the badge under a stationary cursor with no boundary
+  event left to re-reveal it (review finding 5).
+- **Rejected:** a per-`pointerId` Map — only the hover/touch semantic
+  split changes outcomes (two hovering mice don't exist; multi-touch
+  collapses to "last tap"), so per-id tracking is bookkeeping without
+  behavior.
+
+### Sticky touch point (the touch-tap regression)
+
+- **What:** a touch lift's trailing `pointerout` (`relatedTarget: null`)
+  no longer clears state or schedules hides; `touchPoint` survives until
+  the next touch lands elsewhere, the touch becomes a scroll or gesture
+  (`pointercancel`, a new sensor listener), or the pointer crosses into
+  an iframe.
+- **Why:** the old per-image gate leaned on Chrome's sticky post-tap
+  `:hover`; the sensor cleared everything on lift, so every tap's reveal
+  self-destructed 200ms later — before the second tap that opens the
+  popover, and hidden badges are `pointer-events: none`, so that second
+  tap fell through to the page. Unknown badges were effectively
+  unreachable on touch (review finding 1, the wave's most severe).
+  Stickiness mirrors the platform: Chrome holds post-tap hover at the
+  tap point until the next tap, including across layout changes.
+- **Accepted:** a stale sticky point can hold a reveal over whatever an
+  infinite-scroll feed later places under it — exactly what platform
+  sticky hover does; bounded by the next touch event.
+
+### Sensor teardown clears pointer state; `dropPending` split
+
+- **What:** `syncIntentSensor`'s uninstall branch now nulls both points.
+  Made safe by splitting `clearPending` into an internal non-syncing
+  `dropPending` (used by `renderBadge`) plus the syncing export:
+  `renderBadge` settles sensor accounting once, after `syncIntentGate`,
+  so the pending→Unknown handoff no longer bounces the sensor down and
+  up mid-render (which would have wiped the points the handoff's
+  `held` check reads moments later — the trap the review flagged in the
+  same breath as the fix).
+- **Why:** movement while no sensor listens is untracked; a point kept
+  across the gap goes stale, and a later gate consulting it revealed a
+  badge no reader asked about — an intent-policy violation, not just a
+  glitch (finding 2). Invariant now: points are non-null only while the
+  sensor is installed. The split also deletes the two-AbortController /
+  six-listener churn on every first verdict (finding 15).
+
+### Initial presence: `:hover` fallback while hover data is absent
+
+- **What:** `isImageUnderPointer` falls back to `image.matches(":hover")`
+  only while `hoverPoint` is null.
+- **Why:** a page can load with the cursor already resting on an image
+  and the verdict landing before any pointer event; the event-fed points
+  know nothing, and the old code showed the badge (browser hover chain —
+  event-independent). Overlay-covered images never enter the hover
+  chain, but for them the fallback returns the same false the missing
+  data would — strictly a restoration, never a new reveal path (finding
+  4).
+- **Rejected:** an always-on lightweight coordinate tracker installed at
+  content-script init — standing listeners on pages with no badges
+  contradict the §8 removability posture, and it still cannot see a
+  cursor that never moves.
+
+### Pointer-into-iframe = pointer gone
+
+- **What:** the sensor's `pointerout` handler also treats
+  `relatedTarget instanceof HTMLIFrameElement` as departure: clear that
+  pointer's point, schedule the grace hide everywhere.
+- **Why:** entering a cross-document iframe delivers all further pointer
+  events to the child document; the frozen point sat exactly where the
+  fire-time guard would re-hold any hide, pinning the reveal open for as
+  long as the reader worked in the frame (finding 3). Matches the
+  popover's recorded iframe blindness (its dismiss uses window blur).
+  Scoped to iframes like the popover path — framesets and
+  object/embed are not worth the extra instanceof checks until a field
+  report says otherwise.
+
+### Window capture, own-overlay exclusion, topmost-image rule
+
+- **Window capture:** all sensor listeners moved from document capture
+  to window capture — window-capture listeners fire before everything
+  else, so only an earlier `stopImmediatePropagation` on window itself
+  can starve the sensor (finding 11; the containment comment in badge.ts
+  already recorded the ordering).
+- **Own-overlay exclusion:** `hitStackAt` returns an empty stack when
+  its top element is the overlay host (the retargeted shadow-tree hit —
+  the host itself is 0×0 `pointer-events: none`, so it tops a stack only
+  when the point is on a shown badge or the open panel). Reading the
+  panel no longer strobes reveals across the images under its footprint
+  (finding 6); the panel's own image is held by the `openPopover` guard,
+  a hovered badge by its `:hover` guard.
+- **Topmost-image rule:** reveal and hold semantics changed from "image
+  anywhere in the stack" to "image is the topmost image in the stack"
+  (`topImageAt`). `elementsFromPoint` includes images fully covered by
+  other images — LQIP placeholders under their final image, crossfading
+  carousel frames — and revealing both piled two chips on the same
+  +8/+8 anchor for an image the reader cannot see (finding 7). Non-image
+  overlays above still lose (the Instagram case is unchanged); a visible
+  image above wins, matching what `:hover` said before the sensor.
+  **Refinement (same wave, owner follow-up):** when a stack holds two or
+  more images, opacity-hidden frames — own or ancestor opacity 0, per
+  `checkVisibility({ opacityProperty: true })`, the engine's own walk
+  (both option spellings passed for pre-rename Chromes; a browser
+  without the API degrades to plain topmost-wins) — are skipped, so a
+  crossfade's settled-out frame parked at `opacity: 0` above the active
+  one no longer takes the reveal. Cost posture: single-image stacks —
+  the overwhelmingly common case — return before any style read; the
+  opacity walk runs only to arbitrate between stacked images, right
+  after `elementsFromPoint` left style clean at that point. When every
+  image in the stack is opacity-hidden the topmost still wins (`:hover`'s
+  answer; with no visible twin there is nothing to mis-attribute).
+  Residuals, accepted: fractional opacity counts as visible (mid-fade,
+  either attribution is defensible — 0 is the only principled
+  threshold), and `filter: opacity(0)` is not checked (no known
+  crossfade pattern uses it).
+
+### Consolidation
+
+- `scheduleHideAll` was `processPointerAt([])` with the loop bodies
+  hand-copied; deleted, callers pass the empty stack (finding 13).
+- The three-clause "never hide under the reader" predicate, previously
+  duplicated between `syncIntentGate`'s initial presence and the hide
+  timer's fire-time guard, is now one named `readerEngaged` used at both
+  sites (finding 14).
+
+### Test coverage (the mutual-masking finding)
+
+- The review mutation-tested the suite: deleting either the
+  reveal-continuity block in `renderBadge` or the pointer clause in the
+  engagement check left all tests green — each path masked the other
+  (finding 9). Two killers added and verified by re-running both
+  mutations (1 and 4 failures respectively): a verdict landing under the
+  pointer with no chip ever visible (engagement path alone), and a
+  verdict landing in the hide-grace window just after the pointer left
+  (continuity path alone, then the ordinary grace hide). Eight more
+  tests pin the wave's fixes; `elementsFromPoint` is now scripted
+  per-coordinate so multi-pointer scenarios can diverge.
+
+### Recorded, not fixed here
+
+- **Per-move hit-test cost** (finding 12): the unconditional
+  `elementsFromPoint` per `pointermove` forces a style+layout flush
+  whenever the page has dirtied layout — real jank risk on SPA feeds
+  where the sensor never uninstalls. The fix needs design (a cached-rect
+  AABB prefilter is only sound with a staleness escape: syncBadges rects
+  lag scroll by up to a frame and never see pure-transform animations).
+  Queued as its own roadmap chunk rather than rushed here.
+- **`pointer-events: none` images** (finding 8): hit testing skips them,
+  so their gated badges reveal only via keyboard focus. No behavior
+  change made — the sensor comment and a ROADMAP parked item now record
+  the limit so the next field report is a lookup, not a re-diagnosis.
+- **Shadow-DOM coupling** (finding 10): `document.elementsFromPoint`
+  retargets shadow-tree hits to the host, so shadow-discovery work (if
+  ever scheduled) must extend the sensor, not just discovery — recorded
+  in the sensor's header comment and the correction block above.
