@@ -170,6 +170,13 @@ and the review-feedback loop.
   self-signed material by design.
 - **CSS-animation badge re-anchoring gap** (5.1 known-open): no real-site
   report yet; folds into whichever field-bug chunk hits it.
+- **Touch-path live soak** (PR #12 review fix wave): the sticky-tap
+  flow — tap reveals the Unknown badge, reveal survives the lift, second
+  tap opens the popover, next tap elsewhere fades it — is pinned in
+  jsdom only; no touch hardware has exercised it. Verify on a real touch
+  device or DevTools touch emulation (the claude-in-chrome scroll tool
+  cannot synthesize touch) next live session. DECISIONS.md 2026-08-06
+  (review fix wave, sticky touch point) records the expected sequences.
 - **`pointer-events: none` images** (PR #12 review): an image with
   `pointer-events: none` — its own or inherited (the
   `img { pointer-events: none }` drag-protection pattern) — is invisible
