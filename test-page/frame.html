@@ -34,15 +34,18 @@
     </style>
   </head>
   <body>
-    <p>
-      <strong>Framed document</strong> at <code id="frame-origin"></code> — the
-      images below are scanned by this frame's own content-script instance
-      (roadmap chunk 2).
-    </p>
+    <!-- Image first, deliberately: in the 80×80 tiny-frame embedding, the
+         intro paragraph wraps tall enough to push anything after it below
+         the frame's internal fold, where a clipped image never intersects
+         and even a broken tiny-frame guard would badge nothing — the
+         discriminator the tiny fixture promises requires the first image's
+         top-left corner (where the badge anchors) inside the visible
+         strip (PR #13 live pass). -->
     <img src="/fixtures/ai_declared.png" alt="AI-declared fixture in a frame" />
     <p>
       <strong>ai_declared.png</strong> — expected badge: <em>AI — declared</em>,
-      rendered inside the frame.
+      rendered inside the frame by this frame's own content-script instance
+      (roadmap chunk 2; document served at <code id="frame-origin"></code>).
     </p>
     <img src="/fixtures/no_manifest.jpg" alt="No-metadata fixture in a frame" />
     <p>
