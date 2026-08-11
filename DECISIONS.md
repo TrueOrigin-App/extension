@@ -3128,3 +3128,240 @@ choices under §8.
   retargets shadow-tree hits to the host, so shadow-discovery work (if
   ever scheduled) must extend the sensor, not just discovery — recorded
   in the sensor's header comment and the correction block above.
+
+## 2026-08-10 — Roadmap chunk 2: iframe scanning
+
+### Owner decision (§8 ask, resolved before building): all frames, creator-origin fallback
+
+- **What:** the single `content_scripts` entry gains `"all_frames": true`
+  and `"match_origin_as_fallback": true`. No new permissions; scope stays
+  `http/https`; the install warning is unchanged (broad host access
+  already maxed it). The manifest test pins the new shape.
+- **Evaluation presented:**
+  - _`all_frames` only_ (rejected by owner): http(s) child frames only —
+    covers social/article embeds but leaves `about:blank`/`srcdoc`/
+    `data:`/`blob:` frames unscanned. Smaller blast radius; was the
+    session's recommendation as a soak-informed first step.
+  - _Plus `match_origin_as_fallback`_ (chosen): also injects into
+    `about:`/`data:`/`blob:` frames created by http(s) documents, matched
+    via the creator's origin (Chrome 99+ — corrected from 106 during the
+    PR #13 review; requires wildcard-path match
+    patterns, which ours are). Embedded content in those frame types —
+    ad-creative layers, srcdoc embeds — is scanned too, at the cost of
+    the maximal frame-flood exposure. Sandboxed (opaque-origin) frame
+    behavior is documented but thin — flagged for live soak verification.
+- **Per-frame cost posture (the 5.1 "frame-flooding" question, answered):**
+  - Injection is the unavoidable cost: one 68 KB `content.js` instance
+    per matching frame, paid at the manifest level for every frame
+    whether or not it ever badges.
+  - Viewport gating holds across frame boundaries: IntersectionObserver
+    inside a cross-origin iframe computes real visibility through the
+    frame chain (the ad-visibility use case IO was built for), so images
+    in offscreen frames never enter their scheduler. Caveat to watch
+    live: the 200px `rootMargin` lookahead has historically been ignored
+    for the implicit root in cross-origin frames — images there queue at
+    actual visibility (later, never more).
+  - The 96px min-size gate skips frame furniture exactly as it does in
+    top documents.
+
+### Tiny-frame early-exit (owner-selected from the ask)
+
+- **What:** in a child frame (`window.self !== window.top`) whose
+  viewport short side is under `MIN_IMAGE_DIMENSION_PX`, the boot path
+  installs no observers and no scheduler — nothing but a `resize`
+  listener that re-runs the check and starts scanning once the frame
+  grows past the threshold.
+- **Why:** such a frame cannot display an image the min-size gate would
+  pass, and tracking-pixel/ad-slot frames are legion on real pages —
+  without the guard each would run discovery observers and dwell cycles
+  that can never produce a badge. The revive listener exists because
+  `display:none` frames report a 0×0 viewport until shown, and reveal
+  arrives as a resize; a one-shot exit would permanently blind them.
+- **Rejected:** no guard (rely on viewport + size gates alone — simplest,
+  but pays standing observer cost in every pixel frame); a frame-size
+  manifest heuristic doesn't exist (injection is all-or-nothing), so the
+  guard is the earliest point the extension controls.
+
+### Per-frame schedulers share the worker without coordination
+
+- Messaging is already frame-agnostic: `chrome.runtime.sendMessage`
+  reaches the same service worker from any frame, and no worker code
+  changed in this chunk. Each frame's `ScanScheduler` bounds its own
+  in-flight analyses at 2, so the global bound becomes 2 × (frames with
+  visible images) — but that parallelism only hides fetch/encode
+  latency: the WASM validator serializes inside the worker regardless,
+  which is the natural global throttle. The worker's content-hash
+  verdict cache is shared, so the same bytes appearing in N frames
+  validate once; each frame keeps its own page-view URL cache
+  (per-document by construction — no change needed).
+- Constraint 3 is unaffected: frames fetch their own images exactly as
+  top documents already did; no new request types exist.
+
+### Test-page iframe fixtures (chunk-directed)
+
+- `test-page/frame.html` (served at `/frame.html`, allowlisted in
+  serve.mjs): ai_declared.png + no_manifest.jpg referenced same-origin,
+  so acquisition inside the frame needs no fallback. Embedded four ways
+  in index.html:
+  - **Same-origin iframe** — badges render inside the frame; a warm
+    worker hash-matches the parent's bytes and skips re-validation.
+  - **Cross-origin iframe** — the existing localhost/127.0.0.1 host flip
+    (same pattern as the strict-CORS figure, port-agnostic). Separate
+    content-script instance; requests appear under the flipped host in
+    the server log; no worker fallback (images are same-origin to their
+    frame).
+  - **srcdoc iframe** — exercises `match_origin_as_fallback` (an
+    `about:srcdoc` document has no http(s) URL to match); no badge there
+    means fallback matching is broken.
+  - **Tiny 80×80 iframe** — exercises the early-exit: no badges, no
+    analysis requests, and growing it past 96px must revive scanning.
+- Audit text updated: iframe fixtures add per-document render+analysis
+  pairs to the page panel and nothing to the worker panel.
+
+### Residuals (recorded, accepted)
+
+- **Popover clipping:** badges and popovers render inside their frame's
+  document, so a popover in a frame smaller than itself clips at the
+  frame boundary. Rendering outside the frame is cross-origin-impossible
+  (and same-origin escapes aren't worth a second rendering path); the
+  tiny-frame guard removes the worst of it. Revisit only on a field
+  report.
+- **Intent handoff at frame edges** is now two-sided by construction:
+  the parent sensor's "pointer-into-iframe = pointer gone" rule (PR #12)
+  releases the pointer, and the frame's own instance picks it up.
+- **Sandboxed opaque-origin frames** and the cross-origin `rootMargin`
+  caveat: verify during the live soak; no code contingent on either.
+
+### Verification (live, this session)
+
+- Extension rebuilt and reloaded; test page served on 8917. All four
+  fixtures behaved as specified: AI-declared chips rendered inside both
+  the same-origin and cross-origin (127.0.0.1) frames by their own
+  instances; the srcdoc frame revealed its intent-gated Unknown chip on
+  hover and opened the popover with the finalized wording (proving
+  `match_origin_as_fallback` injection); the 80×80 frame showed nothing,
+  and growing it to 480×420 from the parent revived scanning — the
+  chip appeared after the resize with no further interaction. No
+  `[TrueOrigin]` console errors.
+- The popover-clipping residual was observed as predicted: in the
+  260px-tall srcdoc frame the popover's last line sits at the frame
+  boundary. Accepted per the residuals above.
+- Unit suite (251 tests), typecheck, and Prettier all pass; `content.js`
+  is 67 KB.
+
+## 2026-08-10 — Design hooks: test-page fenced (owner-directed)
+
+- `test-page/*` added to shared `detector.ignoreFiles`
+  (.impeccable/config.json). The test pages are dev-only fixtures — never
+  shipped, not part of the product surface DESIGN.md governs — and the
+  hook was flagging their pre-existing caption styles (`#555`, `0.9rem`)
+  on every edit. Owner directed the exemption after the chunk-2 PR
+  surfaced the findings.
+
+## 2026-08-10 — Owner Q&A on iframe-scanning exposure (carry-forwards)
+
+Owner asked two questions after PR #13; the analysis is recorded so later
+chunks inherit it rather than re-deriving.
+
+- **Privacy write-up (chunk 8) carry-forward:** with `all_frames`, badge
+  host elements are visible inside third-party frames, so embedded
+  ad/tracker frames can now detect the extension's presence — previously
+  only the top-level site could. No data leaves the machine (the egress
+  allowlist is unchanged; this is detectability, not egress), but the
+  write-up should state it honestly. The duplicate-fetch traffic-shape
+  observation (5.5 soak notes) likewise now applies inside frames.
+- **Soak watch item (adblocker race):** blockers' _procedural_ cosmetic
+  filters can hide an ad after our injection + IO delivery + 250 ms
+  dwell have all passed. Worst case: a completed local analysis of
+  cached bytes, a transient badge cleaned up by the sync pass the hiding
+  mutation itself schedules, and at most one same-host fallback re-fetch
+  for a frame-cross-origin creative. Watch for "badge flash on ads that
+  then disappear"; a field report would motivate a longer dwell in
+  cross-origin frames, not structural change.
+- **Confirmed by construction:** we cannot reach behind a blocker —
+  network-blocked frames never become documents (no injection into error
+  pages), blocked images fail render and the broken-render gate skips
+  them before any acquisition, and frames already hidden at injection
+  time report 0×0 and hit the tiny-frame early-exit. _Corrected during
+  the PR #13 review (finding 7): the early-exit claim holds only for
+  frames hidden **before** the boot check runs. A frame hidden or shrunk
+  after boot keeps its running instance — observers, scheduler, and
+  listeners — for the page lifetime; the guard is a one-way ratchet with
+  no shrink teardown. Accepted standing cost (teardown machinery would
+  outweigh the rare shrink-after-boot frame); anyone budgeting
+  frame-flood cost from this entry must count booted-then-hidden frames
+  at full price._
+
+## 2026-08-10 — PR #13 review fixes (xhigh review, owner-approved fix list)
+
+The /code-review xhigh pass on PR #13 produced 15 findings; the owner
+approved fixing 13 and accepting 2 (the gate-metric divergence, finding 3,
+and the no-shrink-teardown ratchet, finding 7 — both now documented where
+they live). Free choices made while fixing:
+
+- **Rewrite sentinel over re-injection heuristics (finding 1).** A
+  `document.open()` rewrite erases every document/window listener and
+  replaces the root, but MutationObservers and the Document node survive.
+  Chosen: observe the Document node (both the main observer and a tiny
+  childList-only sentinel), re-run listener installation on root-identity
+  change; the boot path re-enters `start()` when the gate had not passed
+  yet. Rejected: polling `documentElement` identity (a timer in every
+  frame forever), and a `readystatechange` re-arm (it is itself a
+  listener the rewrite erases). The gate logic moved to
+  `content/boot-gate.ts` so the boot path finally has unit tests.
+- **In-frame popover dismiss = close on window blur (finding 2).** Inside
+  a child frame every outside interaction blurs the frame's window and
+  produces no in-document event, so blur closes unconditionally when
+  `self !== top`. Cost accepted: switching applications also dismisses an
+  in-frame popover — indistinguishable from departure using only signals
+  that cross the frame boundary. Cross-frame "at most one popover"
+  coordination via the worker was rejected as messaging machinery for a
+  cosmetic invariant; blur-close already collapses the common cases.
+- **Frame-context element set (finding 10).** `HTMLIFrameElement` checks
+  widened to iframe/frame/object/embed via one `hostsChildContext()`
+  helper used by both the popover blur guard and the intent sensor's
+  pointerout handoff.
+- **Quirks-mode viewport (finding 5).** One `viewportBox()` helper:
+  `document.compatMode === "BackCompat"` → body's client box, else the
+  root's. Used by popover placement (open, re-render, and sync paths) and
+  the scrollbar-dismiss guard, which now also accepts body-targeted
+  root-area clicks in quirks documents.
+- **Worker URL-keyed verdict layer (findings 4/8).** `CoalescingLruCache`
+  (the existing shared mechanism) keyed by URL in front of the
+  ANALYZE_URL handler: concurrent same-URL requests from N frames share
+  one credentialed fetch; retention requires `pinned` +
+  `isCacheableVerdict` — the same policy as the content script's page-view
+  cache, scoped to the worker's lifetime like the hash layer. Residual
+  accepted: the inline (ANALYZE_BYTES) path still ships base64 per frame
+  for same-origin duplicates — a hash-precheck protocol change was
+  rejected as out of scope for a review fix; the bytes come from the
+  frame's disk cache and the hash layer still dedupes the WASM run.
+- **Opaque-origin frames never escalate (finding 6, owner-approved).**
+  `window.origin === "null"` disables `workerCanFetch` entirely and drops
+  credentials from the no-cache rung: the page stripped that context's
+  ambient authority, and the extension must not restore it. Outcome for
+  unreadable images there is the standard no-badge failure path (plan §2:
+  a check that could not run makes no claim).
+- **Dev server (findings 9/12).** All routes read the file before
+  `writeHead` (the 500 path was throwing `ERR_HTTP_HEADERS_SENT` as a
+  fatal unhandled rejection), plus a `headersSent` guard in the catch.
+  New carve-out: fixture responses gain `Access-Control-Allow-Origin: *`
+  **only** when the request sends `Origin: null` — the data:-frame
+  fixture is unreadable in-page without it and can never use the worker
+  (see above), while real-origin requests (the strict-CORS host flip)
+  still get no CORS headers, so the task-5.5 tier is unaffected.
+- **Fixtures discriminate now (findings 11–14).** frame.html images get
+  fixed 240×150 layout boxes (min side ≥ 96): both framed figures sit
+  above the fold in the (now 480-tall) frames, and in the 80×80 tiny
+  frame a broken frame guard produces a visible badge instead of hiding
+  behind the per-image size gate — the figcaption's unfalsifiable
+  server-log criterion is gone. A new `data:` frame fixture isolates
+  `match_origin_as_fallback` from `match_about_blank` (srcdoc cannot).
+  The "exactly twice" network audit is re-scoped per document, with the
+  tab-aggregate arithmetic spelled out. The boot gate additionally gets
+  jsdom unit tests (boot-gate.test.ts) — the fixture is a live check, the
+  test is the regression net.
+- **`.impeccable/config.json` ignore glob** widened `test-page/*` →
+  `test-page/**` (single `*` compiles to `[^/]*` in impeccable's matcher
+  and stops at the first subdirectory — verified against its
+  `globToRegex` during review).

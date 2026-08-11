@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TrueOrigin — iframe fixture</title>
+    <style>
+      body {
+        font:
+          13px/1.45 system-ui,
+          sans-serif;
+        margin: 0.75rem;
+        color: #1c2026;
+      }
+      img {
+        /* Fixed layout box, deliberately independent of the frame's
+           viewport (PR #13 review, findings 11/14): in the 480-wide
+           frames both figures sit above the fold, and in the 80×80 tiny
+           frame the box still passes the per-image min-size gate — so a
+           broken tiny-frame guard produces a visible badge there instead
+           of hiding behind the image gate. max-width:100% would re-couple
+           the box to the frame and quietly undo both properties. */
+        width: 240px;
+        height: 150px;
+        object-fit: contain;
+        background: #f2f3f5;
+        display: block;
+      }
+      p {
+        margin: 0.5rem 0;
+      }
+      code {
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Image first, deliberately: in the 80×80 tiny-frame embedding, the
+         intro paragraph wraps tall enough to push anything after it below
+         the frame's internal fold, where a clipped image never intersects
+         and even a broken tiny-frame guard would badge nothing — the
+         discriminator the tiny fixture promises requires the first image's
+         top-left corner (where the badge anchors) inside the visible
+         strip (PR #13 live pass). -->
+    <img src="/fixtures/ai_declared.png" alt="AI-declared fixture in a frame" />
+    <p>
+      <strong>ai_declared.png</strong> — expected badge: <em>AI — declared</em>,
+      rendered inside the frame by this frame's own content-script instance
+      (roadmap chunk 2; document served at <code id="frame-origin"></code>).
+    </p>
+    <img src="/fixtures/no_manifest.jpg" alt="No-metadata fixture in a frame" />
+    <p>
+      <strong>no_manifest.jpg</strong> — expected badge: <em>Unknown</em>,
+      revealed on hover (intent gate; the parent document's sensor hands the
+      pointer off at the frame edge, this frame's sensor takes over).
+    </p>
+    <script>
+      document.getElementById("frame-origin").textContent = location.origin;
+    </script>
+  </body>
+</html>
