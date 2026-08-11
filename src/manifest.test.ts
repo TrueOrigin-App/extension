@@ -22,12 +22,17 @@ describe("manifest", () => {
   });
 
   // Owner-approved scope (task 5.1 ask): broad static access on http/https —
-  // deliberately not <all_urls> (no file:/ftp: schemes). Changing this scope
-  // in either direction is a new §8 ask.
-  it("registers the content script for all http(s) pages", () => {
+  // deliberately not <all_urls> (no file:/ftp: schemes). Extended (chunk 2
+  // ask, 2026-08-10): every frame, including about:/data:/blob: frames
+  // matched via their creator's origin — embedded content is where a lot of
+  // real media lives. Changing this scope in either direction is a new §8
+  // ask.
+  it("registers the content script for all http(s) pages and their frames", () => {
     expect(manifest.content_scripts).toEqual([
       {
         matches: ["http://*/*", "https://*/*"],
+        all_frames: true,
+        match_origin_as_fallback: true,
         js: ["content.js"],
       },
     ]);

@@ -150,6 +150,96 @@
       </figcaption>
     </figure>
 
+    <h2>Iframe scanning (roadmap chunk 2)</h2>
+    <p>
+      The content script now runs in every frame (<code>all_frames</code> +
+      <code>match_origin_as_fallback</code>). Each frame below carries its own
+      script instance; badges render <em>inside</em> the frame document.
+    </p>
+
+    <figure>
+      <iframe
+        src="/frame.html"
+        title="Same-origin iframe fixture"
+        width="480"
+        height="420"
+        style="border: 1px solid #ccc"
+      ></iframe>
+      <figcaption>
+        <strong>Same-origin iframe</strong> (<code>/frame.html</code>) —
+        expected: <em>AI — declared</em> badge on the framed ai_declared.png,
+        intent-gated <em>Unknown</em> on the framed no_manifest.jpg. The frame's
+        analysis fetches hash-match bytes the parent already analyzed, so a warm
+        worker skips the WASM re-validation.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <iframe
+        id="cross-origin-frame"
+        title="Cross-origin iframe fixture"
+        width="480"
+        height="420"
+        style="border: 1px solid #ccc"
+      ></iframe>
+      <script>
+        // Same host flip as the strict-CORS figure: the frame document is a
+        // different origin than this page, so its content-script instance is
+        // isolated from the parent's. The images inside are same-origin *to
+        // the frame*, so in-frame acquisition works — no worker fallback.
+        (() => {
+          const frame = document.getElementById("cross-origin-frame");
+          const host =
+            location.hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
+          frame.src = `http://${host}:${location.port}/frame.html`;
+        })();
+      </script>
+      <figcaption>
+        <strong>Cross-origin iframe</strong> (host-flipped
+        <code>/frame.html</code>) — same expected badges as the same-origin
+        frame, from a separate content-script instance. The server log shows the
+        frame's requests under the flipped host; the worker network panel shows
+        <em>no</em> fallback fetch for them (the images are same-origin to their
+        own frame).
+      </figcaption>
+    </figure>
+
+    <figure>
+      <iframe
+        title="srcdoc iframe fixture"
+        width="480"
+        height="260"
+        style="border: 1px solid #ccc"
+        srcdoc="<body style='font:13px system-ui;margin:0.75rem'><img src='/fixtures/C.jpg' alt='C2PA test-signed fixture in a srcdoc frame' style='max-width:100%'><p><strong>C.jpg</strong> in an <code>about:srcdoc</code> frame.</p></body>"
+      ></iframe>
+      <figcaption>
+        <strong>srcdoc iframe</strong> — an <code>about:srcdoc</code> document
+        has no http(s) URL, so injection here rides on
+        <code>match_origin_as_fallback</code> (matched via this page's origin).
+        Expected: intent-gated <em>Unknown</em> badge on the framed C.jpg. No
+        badge here means the fallback matching is not working.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <iframe
+        src="/frame.html"
+        title="Tiny iframe fixture (early-exit)"
+        width="80"
+        height="80"
+        style="border: 1px solid #ccc"
+      ></iframe>
+      <figcaption>
+        <strong>Tiny iframe</strong> (80×80, same <code>/frame.html</code>) —
+        its viewport short side is under the 96px minimum image dimension, so
+        the injected script installs nothing (the tiny-frame early-exit;
+        tracking-pixel frames take this path). Expected: no badges, ever, and no
+        analysis requests from this frame in the server log beyond its renders.
+        Growing the frame (e.g. via DevTools) past 96px must revive it: a resize
+        re-runs the boot check and scanning starts.
+      </figcaption>
+    </figure>
+
     <h2>Popover checks (task 5.3)</h2>
     <ul>
       <li>
@@ -220,10 +310,13 @@
       </li>
     </ul>
     <p>
-      In every tier, nothing else — no media bytes, no page URLs. A fixture URL
-      on the <em>page's own host</em> appearing in the worker panel would be a
-      bug (the fallback firing for a same-origin image). The cross-host fetch
-      itself appears once per analysis attempt: a failed first analysis may
+      In every tier, nothing else — no media bytes, no page URLs. The iframe
+      fixtures add <em>nothing</em> to the worker panel: every framed image is
+      same-origin to its own frame, so in-frame acquisition succeeds and the
+      fallback never fires for them. A fixture URL on the
+      <em>page's own host</em> appearing in the worker panel would be a bug (the
+      fallback firing for a same-origin image). The cross-host fetch itself
+      appears once per analysis attempt: a failed first analysis may
       legitimately add one retry (the extension allows two attempts per scan
       cycle, and a source change restarts the cycle) — a steady stream of them
       is a bug.
@@ -235,9 +328,12 @@
       <em>(disk cache)</em> / <em>(memory cache)</em>, never from the server.
       The duplicate figure adds no request of its own; the strict-CORS figure
       adds its render plus two CORS-blocked analysis attempts (both rungs of the
-      in-page ladder — the counts acquire.test.ts pins). The server log (one
-      line per hit, with the requested host) makes the same story visible
-      server-side.
+      in-page ladder — the counts acquire.test.ts pins). The iframe fixtures
+      follow the same per-document pattern: each frame's images show a render
+      plus a from-cache analysis fetch under that frame's origin (the tiny frame
+      shows renders only — its script early-exits before scanning). The server
+      log (one line per hit, with the requested host) makes the same story
+      visible server-side.
     </p>
   </body>
 </html>

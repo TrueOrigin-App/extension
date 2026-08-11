@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT ?? 8917);
 const PAGE = fileURLToPath(new URL("./index.html", import.meta.url));
+const FRAME_PAGE = fileURLToPath(new URL("./frame.html", import.meta.url));
 const FIXTURES = new URL("../src/providers/c2pa/fixtures/", import.meta.url);
 
 // Explicit allowlist — nothing else in the fixtures directory (certs,
@@ -43,6 +44,14 @@ const server = createServer(async (request, response) => {
     if (path === "/" || path === "/index.html") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(await readFile(PAGE));
+      return;
+    }
+
+    // Iframe fixture (roadmap chunk 2): embedded same-origin by the page
+    // and cross-origin via the localhost/127.0.0.1 host flip.
+    if (path === "/frame.html") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(await readFile(FRAME_PAGE));
       return;
     }
 

@@ -3128,3 +3128,122 @@ choices under §8.
   retargets shadow-tree hits to the host, so shadow-discovery work (if
   ever scheduled) must extend the sensor, not just discovery — recorded
   in the sensor's header comment and the correction block above.
+
+## 2026-08-10 — Roadmap chunk 2: iframe scanning
+
+### Owner decision (§8 ask, resolved before building): all frames, creator-origin fallback
+
+- **What:** the single `content_scripts` entry gains `"all_frames": true`
+  and `"match_origin_as_fallback": true`. No new permissions; scope stays
+  `http/https`; the install warning is unchanged (broad host access
+  already maxed it). The manifest test pins the new shape.
+- **Evaluation presented:**
+  - _`all_frames` only_ (rejected by owner): http(s) child frames only —
+    covers social/article embeds but leaves `about:blank`/`srcdoc`/
+    `data:`/`blob:` frames unscanned. Smaller blast radius; was the
+    session's recommendation as a soak-informed first step.
+  - _Plus `match_origin_as_fallback`_ (chosen): also injects into
+    `about:`/`data:`/`blob:` frames created by http(s) documents, matched
+    via the creator's origin (Chrome 106+; requires wildcard-path match
+    patterns, which ours are). Embedded content in those frame types —
+    ad-creative layers, srcdoc embeds — is scanned too, at the cost of
+    the maximal frame-flood exposure. Sandboxed (opaque-origin) frame
+    behavior is documented but thin — flagged for live soak verification.
+- **Per-frame cost posture (the 5.1 "frame-flooding" question, answered):**
+  - Injection is the unavoidable cost: one 68 KB `content.js` instance
+    per matching frame, paid at the manifest level for every frame
+    whether or not it ever badges.
+  - Viewport gating holds across frame boundaries: IntersectionObserver
+    inside a cross-origin iframe computes real visibility through the
+    frame chain (the ad-visibility use case IO was built for), so images
+    in offscreen frames never enter their scheduler. Caveat to watch
+    live: the 200px `rootMargin` lookahead has historically been ignored
+    for the implicit root in cross-origin frames — images there queue at
+    actual visibility (later, never more).
+  - The 96px min-size gate skips frame furniture exactly as it does in
+    top documents.
+
+### Tiny-frame early-exit (owner-selected from the ask)
+
+- **What:** in a child frame (`window.self !== window.top`) whose
+  viewport short side is under `MIN_IMAGE_DIMENSION_PX`, the boot path
+  installs no observers and no scheduler — nothing but a `resize`
+  listener that re-runs the check and starts scanning once the frame
+  grows past the threshold.
+- **Why:** such a frame cannot display an image the min-size gate would
+  pass, and tracking-pixel/ad-slot frames are legion on real pages —
+  without the guard each would run discovery observers and dwell cycles
+  that can never produce a badge. The revive listener exists because
+  `display:none` frames report a 0×0 viewport until shown, and reveal
+  arrives as a resize; a one-shot exit would permanently blind them.
+- **Rejected:** no guard (rely on viewport + size gates alone — simplest,
+  but pays standing observer cost in every pixel frame); a frame-size
+  manifest heuristic doesn't exist (injection is all-or-nothing), so the
+  guard is the earliest point the extension controls.
+
+### Per-frame schedulers share the worker without coordination
+
+- Messaging is already frame-agnostic: `chrome.runtime.sendMessage`
+  reaches the same service worker from any frame, and no worker code
+  changed in this chunk. Each frame's `ScanScheduler` bounds its own
+  in-flight analyses at 2, so the global bound becomes 2 × (frames with
+  visible images) — but that parallelism only hides fetch/encode
+  latency: the WASM validator serializes inside the worker regardless,
+  which is the natural global throttle. The worker's content-hash
+  verdict cache is shared, so the same bytes appearing in N frames
+  validate once; each frame keeps its own page-view URL cache
+  (per-document by construction — no change needed).
+- Constraint 3 is unaffected: frames fetch their own images exactly as
+  top documents already did; no new request types exist.
+
+### Test-page iframe fixtures (chunk-directed)
+
+- `test-page/frame.html` (served at `/frame.html`, allowlisted in
+  serve.mjs): ai_declared.png + no_manifest.jpg referenced same-origin,
+  so acquisition inside the frame needs no fallback. Embedded four ways
+  in index.html:
+  - **Same-origin iframe** — badges render inside the frame; a warm
+    worker hash-matches the parent's bytes and skips re-validation.
+  - **Cross-origin iframe** — the existing localhost/127.0.0.1 host flip
+    (same pattern as the strict-CORS figure, port-agnostic). Separate
+    content-script instance; requests appear under the flipped host in
+    the server log; no worker fallback (images are same-origin to their
+    frame).
+  - **srcdoc iframe** — exercises `match_origin_as_fallback` (an
+    `about:srcdoc` document has no http(s) URL to match); no badge there
+    means fallback matching is broken.
+  - **Tiny 80×80 iframe** — exercises the early-exit: no badges, no
+    analysis requests, and growing it past 96px must revive scanning.
+- Audit text updated: iframe fixtures add per-document render+analysis
+  pairs to the page panel and nothing to the worker panel.
+
+### Residuals (recorded, accepted)
+
+- **Popover clipping:** badges and popovers render inside their frame's
+  document, so a popover in a frame smaller than itself clips at the
+  frame boundary. Rendering outside the frame is cross-origin-impossible
+  (and same-origin escapes aren't worth a second rendering path); the
+  tiny-frame guard removes the worst of it. Revisit only on a field
+  report.
+- **Intent handoff at frame edges** is now two-sided by construction:
+  the parent sensor's "pointer-into-iframe = pointer gone" rule (PR #12)
+  releases the pointer, and the frame's own instance picks it up.
+- **Sandboxed opaque-origin frames** and the cross-origin `rootMargin`
+  caveat: verify during the live soak; no code contingent on either.
+
+### Verification (live, this session)
+
+- Extension rebuilt and reloaded; test page served on 8917. All four
+  fixtures behaved as specified: AI-declared chips rendered inside both
+  the same-origin and cross-origin (127.0.0.1) frames by their own
+  instances; the srcdoc frame revealed its intent-gated Unknown chip on
+  hover and opened the popover with the finalized wording (proving
+  `match_origin_as_fallback` injection); the 80×80 frame showed nothing,
+  and growing it to 480×420 from the parent revived scanning — the
+  chip appeared after the resize with no further interaction. No
+  `[TrueOrigin]` console errors.
+- The popover-clipping residual was observed as predicted: in the
+  260px-tall srcdoc frame the popover's last line sits at the frame
+  boundary. Accepted per the residuals above.
+- Unit suite (251 tests), typecheck, and Prettier all pass; `content.js`
+  is 67 KB.

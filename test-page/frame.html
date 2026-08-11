@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TrueOrigin — iframe fixture</title>
+    <style>
+      body {
+        font:
+          13px/1.45 system-ui,
+          sans-serif;
+        margin: 0.75rem;
+        color: #1c2026;
+      }
+      img {
+        max-width: 100%;
+        display: block;
+      }
+      p {
+        margin: 0.5rem 0;
+      }
+      code {
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <p>
+      <strong>Framed document</strong> at <code id="frame-origin"></code> — the
+      images below are scanned by this frame's own content-script instance
+      (roadmap chunk 2).
+    </p>
+    <img src="/fixtures/ai_declared.png" alt="AI-declared fixture in a frame" />
+    <p>
+      <strong>ai_declared.png</strong> — expected badge: <em>AI — declared</em>,
+      rendered inside the frame.
+    </p>
+    <img src="/fixtures/no_manifest.jpg" alt="No-metadata fixture in a frame" />
+    <p>
+      <strong>no_manifest.jpg</strong> — expected badge: <em>Unknown</em>,
+      revealed on hover (intent gate; the parent document's sensor hands the
+      pointer off at the frame edge, this frame's sensor takes over).
+    </p>
+    <script>
+      document.getElementById("frame-origin").textContent = location.origin;
+    </script>
+  </body>
+</html>

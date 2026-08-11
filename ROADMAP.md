@@ -24,21 +24,6 @@ How to work the queue:
 
 ---
 
-## 2. Iframe scanning — queued
-
-**Goal:** scan images inside iframes (`all_frames: true`).
-
-- Owner is open to this in principle (2026-08-05), but it changes
-  content-script injection scope, so the session still opens with the
-  formal §8 ask: concrete manifest diff, per-frame cost posture
-  (about:blank/sandboxed frames, `match_origin_as_fallback`), and how
-  per-frame scheduler instances share the worker.
-- Add a test-page iframe fixture (same-origin and cross-origin via the
-  localhost/127.0.0.1 host split the strict-CORS tier already uses).
-- **Context:** DECISIONS.md 2026-07-26 (task 5.1 — `all_frames` is part
-  of its known-open trio; scheduler design), test-page serve.mjs notes
-  in the 5.5 entries.
-
 ## 3. Badge occlusion by page overlays — queued
 
 **Goal:** resolve the remaining z-index-overlay problem (badges paint
@@ -211,5 +196,7 @@ and the review-feedback loop.
 
 1. Instagram field bug (intent gate blind under page overlays; Reddit
    shadow-DOM item retired) — PR #12
+2. Iframe scanning (`all_frames` + `match_origin_as_fallback`,
+   tiny-frame early-exit, test-page frame fixtures) — PR #13
 
 (Completed chunks land here as one-liners — `N. Title — PR #N`.)

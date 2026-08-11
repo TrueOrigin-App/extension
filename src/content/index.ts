@@ -416,8 +416,35 @@ function main(): void {
   document.fonts?.ready.then(scheduleSync, () => undefined);
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", main, { once: true });
-} else {
+// Iframe scanning (roadmap chunk 2): this script runs in every frame
+// (all_frames + match_origin_as_fallback), each instance scanning its own
+// document with its own observers and scheduler; the service worker — and
+// its cross-frame content-hash verdict cache — is shared. A child frame
+// whose viewport is shorter than MIN_IMAGE_DIMENSION_PX on either side
+// cannot display an image the min-size gate would pass, so it installs
+// nothing (tracking-pixel and ad-slot frames are legion; injection itself
+// is the only cost Chrome has already paid). The resize listener revives a
+// frame that grows — display:none frames report a 0×0 viewport until
+// shown, and reveal arrives as a resize.
+function start(): void {
+  if (window.self !== window.top) {
+    const shortSide = (): number =>
+      Math.min(window.innerWidth, window.innerHeight);
+    if (shortSide() < MIN_IMAGE_DIMENSION_PX) {
+      const revive = (): void => {
+        if (shortSide() < MIN_IMAGE_DIMENSION_PX) return;
+        window.removeEventListener("resize", revive);
+        main();
+      };
+      window.addEventListener("resize", revive);
+      return;
+    }
+  }
   main();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", start, { once: true });
+} else {
+  start();
 }
