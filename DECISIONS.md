@@ -3247,3 +3247,12 @@ choices under §8.
   boundary. Accepted per the residuals above.
 - Unit suite (251 tests), typecheck, and Prettier all pass; `content.js`
   is 67 KB.
+
+## 2026-08-10 — Design hooks: test-page fenced (owner-directed)
+
+- `test-page/*` added to shared `detector.ignoreFiles`
+  (.impeccable/config.json). The test pages are dev-only fixtures — never
+  shipped, not part of the product surface DESIGN.md governs — and the
+  hook was flagging their pre-existing caption styles (`#555`, `0.9rem`)
+  on every edit. Owner directed the exemption after the chunk-2 PR
+  surfaced the findings.
