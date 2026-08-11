@@ -129,6 +129,8 @@ verification passes).
 - Owner decision (2026-08-05): the write-up **keeps** the
   remote-manifest-fetch sentence; the per-image popover disclosure is
   dropped (see DECISIONS.md same date).
+- Must also cover third-party-frame detectability from iframe scanning
+  (DECISIONS.md 2026-08-10, iframe-exposure Q&A entry).
 - Where the document lives (README section vs. separate file) is a free
   choice; record it.
 

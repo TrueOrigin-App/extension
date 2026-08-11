@@ -3256,3 +3256,29 @@ choices under §8.
   hook was flagging their pre-existing caption styles (`#555`, `0.9rem`)
   on every edit. Owner directed the exemption after the chunk-2 PR
   surfaced the findings.
+
+## 2026-08-10 — Owner Q&A on iframe-scanning exposure (carry-forwards)
+
+Owner asked two questions after PR #13; the analysis is recorded so later
+chunks inherit it rather than re-deriving.
+
+- **Privacy write-up (chunk 8) carry-forward:** with `all_frames`, badge
+  host elements are visible inside third-party frames, so embedded
+  ad/tracker frames can now detect the extension's presence — previously
+  only the top-level site could. No data leaves the machine (the egress
+  allowlist is unchanged; this is detectability, not egress), but the
+  write-up should state it honestly. The duplicate-fetch traffic-shape
+  observation (5.5 soak notes) likewise now applies inside frames.
+- **Soak watch item (adblocker race):** blockers' *procedural* cosmetic
+  filters can hide an ad after our injection + IO delivery + 250 ms
+  dwell have all passed. Worst case: a completed local analysis of
+  cached bytes, a transient badge cleaned up by the sync pass the hiding
+  mutation itself schedules, and at most one same-host fallback re-fetch
+  for a frame-cross-origin creative. Watch for "badge flash on ads that
+  then disappear"; a field report would motivate a longer dwell in
+  cross-origin frames, not structural change.
+- **Confirmed by construction:** we cannot reach behind a blocker —
+  network-blocked frames never become documents (no injection into error
+  pages), blocked images fail render and the broken-render gate skips
+  them before any acquisition, and cosmetically hidden frames report
+  0×0 and hit the tiny-frame early-exit.
