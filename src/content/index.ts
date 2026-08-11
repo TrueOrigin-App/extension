@@ -26,6 +26,7 @@ import {
   forgetAcquisitionFailure,
   type UrlCacheEntry,
 } from "./acquire";
+import { passesBootGate } from "./boot-gate";
 import {
   clearPending,
   markPending,
@@ -390,23 +391,12 @@ const mutationObserver = new MutationObserver((records) => {
   scheduleSync();
 });
 
-function main(): void {
-  for (const image of Array.from(document.images)) {
-    track(image);
-  }
-
-  // No attributeFilter: identity needs src/srcset/sizes on <img> plus
-  // srcset/sizes/media/type on <source>, and badge sync needs the
-  // class/style toggles pages use to show and hide images. Per-record
-  // cost is an instanceof plus a Set lookup; sync is rAF-coalesced and
-  // exits immediately on pages with no badges.
-  mutationObserver.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeOldValue: true,
-  });
-
+// Split out of main() because a document rewrite erases exactly these
+// registrations (see the rewrite sentinel below) and they must be
+// re-installable alone. Idempotent by addEventListener semantics — the
+// same (type, listener, capture) triple registers once — so calling it
+// when nothing was erased is free.
+function installPageListeners(): void {
   window.addEventListener("resize", scheduleSync);
   // Scroll events don't bubble; capture also catches inner scrollers.
   document.addEventListener("scroll", scheduleSync, true);
@@ -416,31 +406,53 @@ function main(): void {
   document.fonts?.ready.then(scheduleSync, () => undefined);
 }
 
+let mainStarted = false;
+
+function main(): void {
+  mainStarted = true;
+  for (const image of Array.from(document.images)) {
+    track(image);
+  }
+
+  // No attributeFilter: identity needs src/srcset/sizes on <img> plus
+  // srcset/sizes/media/type on <source>, and badge sync needs the
+  // class/style toggles pages use to show and hide images. Per-record
+  // cost is an instanceof plus a Set lookup; sync is rAF-coalesced and
+  // exits immediately on pages with no badges.
+  //
+  // Observed on the Document node, not documentElement: document.open()
+  // replaces the root element, and an observer bound to the old root
+  // would watch a detached tree forever. The Document node is the
+  // identity that survives a rewrite — the root swap itself then arrives
+  // as an ordinary childList record (old root untracked, new root's
+  // images tracked by the branches above).
+  mutationObserver.observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeOldValue: true,
+  });
+
+  installPageListeners();
+}
+
 // Iframe scanning (roadmap chunk 2): this script runs in every frame
 // (all_frames + match_origin_as_fallback), each instance scanning its own
 // document with its own observers and scheduler; the service worker — and
 // its cross-frame content-hash verdict cache — is shared. A child frame
 // whose viewport is shorter than MIN_IMAGE_DIMENSION_PX on either side
-// cannot display an image the min-size gate would pass, so it installs
-// nothing (tracking-pixel and ad-slot frames are legion; injection itself
-// is the only cost Chrome has already paid). The resize listener revives a
-// frame that grows — display:none frames report a 0×0 viewport until
-// shown, and reveal arrives as a resize.
+// installs nothing (tracking-pixel and ad-slot frames are legion;
+// injection itself is the only cost Chrome has already paid). This is an
+// accepted blind spot, not an equivalence: the min-size gate measures the
+// image's layout box, which a short-but-scrollable frame can lay out
+// larger than its viewport — such frames stay unscanned until the frame
+// itself grows, because content overflowing a sub-minimum frame is
+// treated as non-content (PR #13 review, finding 3). The gate's resize
+// listener revives a frame that grows — display:none frames report a 0×0
+// viewport until shown, and reveal arrives as a resize.
 function start(): void {
-  if (window.self !== window.top) {
-    const shortSide = (): number =>
-      Math.min(window.innerWidth, window.innerHeight);
-    if (shortSide() < MIN_IMAGE_DIMENSION_PX) {
-      const revive = (): void => {
-        if (shortSide() < MIN_IMAGE_DIMENSION_PX) return;
-        window.removeEventListener("resize", revive);
-        main();
-      };
-      window.addEventListener("resize", revive);
-      return;
-    }
-  }
-  main();
+  if (mainStarted) return;
+  if (passesBootGate(window, MIN_IMAGE_DIMENSION_PX, start)) main();
 }
 
 if (document.readyState === "loading") {
@@ -448,3 +460,24 @@ if (document.readyState === "loading") {
 } else {
   start();
 }
+
+// Rewrite sentinel (PR #13 review, finding 1 — the friendly-iframe ad
+// pattern): an ad tag calling document.open()/write() on an injected
+// about:blank document erases every event listener on the document AND
+// window (HTML spec "document open steps") and replaces the root element,
+// silently disarming everything start() and main() installed — including
+// the gate's revive listener — while Chrome never re-injects, because no
+// navigation commits. MutationObservers are not event listeners and the
+// Document node persists through a rewrite, so a childList observer on the
+// Document is the one hook that outlives it: when the root's identity
+// changes, re-install what the rewrite erased. Image tracking needs no
+// help here — the main observer targets the same surviving Document node
+// and sees the swap as a childList record.
+let observedRoot: Element | null = document.documentElement;
+new MutationObserver(() => {
+  const root = document.documentElement;
+  if (root === null || root === observedRoot) return;
+  observedRoot = root;
+  if (mainStarted) installPageListeners();
+  else start(); // re-evaluates the gate; re-arms the erased revive listener
+}).observe(document, { childList: true });

@@ -2,7 +2,7 @@
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": [
-      "test-page/*"
+      "test-page/**"
     ],
     "ignoreValues": [
       {

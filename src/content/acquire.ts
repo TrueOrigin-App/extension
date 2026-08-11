@@ -79,6 +79,20 @@ function isAcquisitionFailure(thrown: unknown): boolean {
  * the worker fetch, which does not use the channel for bytes at all. */
 class TransportError extends Error {}
 
+// An opaque-origin document — a sandboxed frame without allow-same-origin,
+// or a data: frame, both now injected via match_origin_as_fallback —
+// serializes its origin as "null". The page deliberately stripped that
+// context's ambient authority, and the extension must not restore it on
+// the frame's behalf: no credentialed request runs for an opaque-origin
+// instance — the no-cache rung goes out cookieless (a credentialed CORS
+// read would need `ACAO: null` + Allow-Credentials and fail anyway), and
+// acquisition failures are terminal (no badge) instead of escalating to
+// the worker's cookie-bearing fetch (owner-approved, PR #13 review,
+// finding 6).
+// (typeof-guarded: the test suite evaluates this module without a window.)
+const hasOpaqueOrigin =
+  typeof window !== "undefined" && window.origin === "null";
+
 // ---------------------------------------------------------------------------
 // Per-page-view acquisition memory (owner-accepted review follow-up,
 // DECISIONS.md 2026-08-04). Two independent memories, both module state —
@@ -231,8 +245,9 @@ async function fetchImage(url: string): Promise<Response> {
     // failure lands in the worker fallback, whose cookie-bearing fetch
     // cures it anyway. Other TypeErrors (offline, DNS, strict CORS) just
     // fail the same way twice, quickly, and reach the worker fallback
-    // below.
-    return request("no-cache", "include");
+    // below. Opaque-origin instances revalidate cookieless (see
+    // hasOpaqueOrigin).
+    return request("no-cache", hasOpaqueOrigin ? undefined : "include");
   }
 }
 
@@ -309,8 +324,11 @@ async function analyzeViaWorkerFetch(url: string): Promise<UrlCacheEntry> {
  * context cannot do the job (see the module header for the ladder). */
 export async function acquireAndAnalyze(url: string): Promise<UrlCacheEntry> {
   // The worker can only re-fetch http(s): data: decodes in-page without
-  // CORS, and blob: handles are scoped to this page's context.
-  const workerCanFetch = url.startsWith("http:") || url.startsWith("https:");
+  // CORS, and blob: handles are scoped to this page's context. Opaque-
+  // origin instances never escalate at all (see hasOpaqueOrigin) — every
+  // fallback site below keys off this one flag.
+  const workerCanFetch =
+    !hasOpaqueOrigin && (url.startsWith("http:") || url.startsWith("https:"));
 
   if (workerCanFetch) {
     assertNoRecentFailure(url);

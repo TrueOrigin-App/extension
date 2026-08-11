@@ -3144,7 +3144,8 @@ choices under §8.
     session's recommendation as a soak-informed first step.
   - _Plus `match_origin_as_fallback`_ (chosen): also injects into
     `about:`/`data:`/`blob:` frames created by http(s) documents, matched
-    via the creator's origin (Chrome 106+; requires wildcard-path match
+    via the creator's origin (Chrome 99+ — corrected from 106 during the
+    PR #13 review; requires wildcard-path match
     patterns, which ours are). Embedded content in those frame types —
     ad-creative layers, srcdoc embeds — is scanned too, at the cost of
     the maximal frame-flood exposure. Sandboxed (opaque-origin) frame
@@ -3280,5 +3281,87 @@ chunks inherit it rather than re-deriving.
 - **Confirmed by construction:** we cannot reach behind a blocker —
   network-blocked frames never become documents (no injection into error
   pages), blocked images fail render and the broken-render gate skips
-  them before any acquisition, and cosmetically hidden frames report
-  0×0 and hit the tiny-frame early-exit.
+  them before any acquisition, and frames already hidden at injection
+  time report 0×0 and hit the tiny-frame early-exit. _Corrected during
+  the PR #13 review (finding 7): the early-exit claim holds only for
+  frames hidden **before** the boot check runs. A frame hidden or shrunk
+  after boot keeps its running instance — observers, scheduler, and
+  listeners — for the page lifetime; the guard is a one-way ratchet with
+  no shrink teardown. Accepted standing cost (teardown machinery would
+  outweigh the rare shrink-after-boot frame); anyone budgeting
+  frame-flood cost from this entry must count booted-then-hidden frames
+  at full price._
+
+## 2026-08-10 — PR #13 review fixes (xhigh review, owner-approved fix list)
+
+The /code-review xhigh pass on PR #13 produced 15 findings; the owner
+approved fixing 13 and accepting 2 (the gate-metric divergence, finding 3,
+and the no-shrink-teardown ratchet, finding 7 — both now documented where
+they live). Free choices made while fixing:
+
+- **Rewrite sentinel over re-injection heuristics (finding 1).** A
+  `document.open()` rewrite erases every document/window listener and
+  replaces the root, but MutationObservers and the Document node survive.
+  Chosen: observe the Document node (both the main observer and a tiny
+  childList-only sentinel), re-run listener installation on root-identity
+  change; the boot path re-enters `start()` when the gate had not passed
+  yet. Rejected: polling `documentElement` identity (a timer in every
+  frame forever), and a `readystatechange` re-arm (it is itself a
+  listener the rewrite erases). The gate logic moved to
+  `content/boot-gate.ts` so the boot path finally has unit tests.
+- **In-frame popover dismiss = close on window blur (finding 2).** Inside
+  a child frame every outside interaction blurs the frame's window and
+  produces no in-document event, so blur closes unconditionally when
+  `self !== top`. Cost accepted: switching applications also dismisses an
+  in-frame popover — indistinguishable from departure using only signals
+  that cross the frame boundary. Cross-frame "at most one popover"
+  coordination via the worker was rejected as messaging machinery for a
+  cosmetic invariant; blur-close already collapses the common cases.
+- **Frame-context element set (finding 10).** `HTMLIFrameElement` checks
+  widened to iframe/frame/object/embed via one `hostsChildContext()`
+  helper used by both the popover blur guard and the intent sensor's
+  pointerout handoff.
+- **Quirks-mode viewport (finding 5).** One `viewportBox()` helper:
+  `document.compatMode === "BackCompat"` → body's client box, else the
+  root's. Used by popover placement (open, re-render, and sync paths) and
+  the scrollbar-dismiss guard, which now also accepts body-targeted
+  root-area clicks in quirks documents.
+- **Worker URL-keyed verdict layer (findings 4/8).** `CoalescingLruCache`
+  (the existing shared mechanism) keyed by URL in front of the
+  ANALYZE_URL handler: concurrent same-URL requests from N frames share
+  one credentialed fetch; retention requires `pinned` +
+  `isCacheableVerdict` — the same policy as the content script's page-view
+  cache, scoped to the worker's lifetime like the hash layer. Residual
+  accepted: the inline (ANALYZE_BYTES) path still ships base64 per frame
+  for same-origin duplicates — a hash-precheck protocol change was
+  rejected as out of scope for a review fix; the bytes come from the
+  frame's disk cache and the hash layer still dedupes the WASM run.
+- **Opaque-origin frames never escalate (finding 6, owner-approved).**
+  `window.origin === "null"` disables `workerCanFetch` entirely and drops
+  credentials from the no-cache rung: the page stripped that context's
+  ambient authority, and the extension must not restore it. Outcome for
+  unreadable images there is the standard no-badge failure path (plan §2:
+  a check that could not run makes no claim).
+- **Dev server (findings 9/12).** All routes read the file before
+  `writeHead` (the 500 path was throwing `ERR_HTTP_HEADERS_SENT` as a
+  fatal unhandled rejection), plus a `headersSent` guard in the catch.
+  New carve-out: fixture responses gain `Access-Control-Allow-Origin: *`
+  **only** when the request sends `Origin: null` — the data:-frame
+  fixture is unreadable in-page without it and can never use the worker
+  (see above), while real-origin requests (the strict-CORS host flip)
+  still get no CORS headers, so the task-5.5 tier is unaffected.
+- **Fixtures discriminate now (findings 11–14).** frame.html images get
+  fixed 240×150 layout boxes (min side ≥ 96): both framed figures sit
+  above the fold in the (now 480-tall) frames, and in the 80×80 tiny
+  frame a broken frame guard produces a visible badge instead of hiding
+  behind the per-image size gate — the figcaption's unfalsifiable
+  server-log criterion is gone. A new `data:` frame fixture isolates
+  `match_origin_as_fallback` from `match_about_blank` (srcdoc cannot).
+  The "exactly twice" network audit is re-scoped per document, with the
+  tab-aggregate arithmetic spelled out. The boot gate additionally gets
+  jsdom unit tests (boot-gate.test.ts) — the fixture is a live check, the
+  test is the regression net.
+- **`.impeccable/config.json` ignore glob** widened `test-page/*` →
+  `test-page/**` (single `*` compiles to `[^/]*` in impeccable's matcher
+  and stops at the first subdirectory — verified against its
+  `globToRegex` during review).

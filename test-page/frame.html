@@ -12,7 +12,17 @@
         color: #1c2026;
       }
       img {
-        max-width: 100%;
+        /* Fixed layout box, deliberately independent of the frame's
+           viewport (PR #13 review, findings 11/14): in the 480-wide
+           frames both figures sit above the fold, and in the 80×80 tiny
+           frame the box still passes the per-image min-size gate — so a
+           broken tiny-frame guard produces a visible badge there instead
+           of hiding behind the image gate. max-width:100% would re-couple
+           the box to the frame and quietly undo both properties. */
+        width: 240px;
+        height: 150px;
+        object-fit: contain;
+        background: #f2f3f5;
         display: block;
       }
       p {

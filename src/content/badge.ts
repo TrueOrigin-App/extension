@@ -644,6 +644,23 @@ function placePopover(popover: HTMLDivElement, place: PopoverPlacement): void {
   popover.style.top = `${top + scrollY}px`;
 }
 
+/** The viewport box every placement decision measures against. In
+ * standards mode that is the root element's client box; in quirks mode
+ * the root's client box tracks the *content* (clientHeight of an html
+ * element holding 800px of text is ~800, not the frame height), and
+ * <body> carries the viewport instead. Doctype-less documents are quirks
+ * mode — rare at top level, routine among the srcdoc/document.write ad
+ * frames all_frames now injects into, where the content-box reading made
+ * every below-the-fold popover open into invisible space (PR #13 review,
+ * finding 5). */
+function viewportBox(): { width: number; height: number } {
+  const root =
+    document.compatMode === "BackCompat"
+      ? (document.body ?? document.documentElement)
+      : document.documentElement;
+  return { width: root.clientWidth, height: root.clientHeight };
+}
+
 /** Measure-then-place for the open and re-render paths, where the panel
  * was just (re)built and a synchronous measure is unavoidable — cold
  * paths; the per-frame sync path instead reads ahead in syncBadges. */
@@ -654,6 +671,7 @@ function measureAndPlacePopover(
   scrollX: number,
   scrollY: number,
 ): void {
+  const viewport = viewportBox();
   placePopover(popover, {
     rect,
     scrollX,
@@ -661,8 +679,8 @@ function measureAndPlacePopover(
     popoverWidth: popover.offsetWidth,
     popoverHeight: popover.offsetHeight,
     badgeHeight: entry.element.offsetHeight,
-    viewportWidth: document.documentElement.clientWidth,
-    viewportHeight: document.documentElement.clientHeight,
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height,
   });
 }
 
@@ -709,6 +727,21 @@ function closePopover(refocusBadge = false): void {
   }
 }
 
+/** Elements that host a child browsing context: pointer and key events
+ * inside one never reach this document, so each is a dismiss/handoff
+ * boundary. all_frames runs sibling instances not just in <iframe> but in
+ * frameset <frame>, <object>, and <embed> child documents, whose host
+ * elements are different interfaces — an instanceof against the iframe
+ * interface alone misses them (PR #13 review, finding 10). */
+function hostsChildContext(node: unknown): boolean {
+  return (
+    node instanceof HTMLIFrameElement ||
+    node instanceof HTMLFrameElement ||
+    node instanceof HTMLObjectElement ||
+    node instanceof HTMLEmbedElement
+  );
+}
+
 /** Width of the edge band treated as an overlay scrollbar. Chrome's
  * overlay thumb is ~15px at its hover width; 17 adds slack. */
 const OVERLAY_SCROLLBAR_BAND_PX = 17;
@@ -728,13 +761,22 @@ const OVERLAY_SCROLLBAR_BAND_PX = 17;
  * ordinary light dismiss. */
 function isRootScrollbarPointerdown(event: PointerEvent): boolean {
   const root = document.documentElement;
-  if (event.target !== root) return false;
+  // In quirks mode the viewport-establishing element is <body> (see
+  // viewportBox), and it is also what a root-area click can target there;
+  // the viewport reads below must come from the same element, or the
+  // scrollHeight comparison is content-vs-content and permanently false
+  // (PR #13 review, finding 5).
+  const quirks = document.compatMode === "BackCompat";
+  if (event.target !== root && !(quirks && event.target === document.body)) {
+    return false;
+  }
+  const viewport = viewportBox();
   const rtl = getComputedStyle(root).direction === "rtl";
-  const gutter = window.innerWidth - root.clientWidth;
+  const gutter = window.innerWidth - viewport.width;
   if (gutter > 0) {
     return (
-      (rtl ? event.clientX < gutter : event.clientX >= root.clientWidth) ||
-      event.clientY >= root.clientHeight
+      (rtl ? event.clientX < gutter : event.clientX >= viewport.width) ||
+      event.clientY >= viewport.height
     );
   }
   const scroller = document.scrollingElement ?? root;
@@ -742,8 +784,8 @@ function isRootScrollbarPointerdown(event: PointerEvent): boolean {
     ? event.clientX <= OVERLAY_SCROLLBAR_BAND_PX
     : event.clientX >= window.innerWidth - OVERLAY_SCROLLBAR_BAND_PX;
   return (
-    (scroller.scrollHeight > root.clientHeight && nearVerticalEdge) ||
-    (scroller.scrollWidth > root.clientWidth &&
+    (scroller.scrollHeight > viewport.height && nearVerticalEdge) ||
+    (scroller.scrollWidth > viewport.width &&
       event.clientY >= window.innerHeight - OVERLAY_SCROLLBAR_BAND_PX)
   );
 }
@@ -852,14 +894,27 @@ function openPopoverFor(image: HTMLImageElement): void {
     },
     { capture: true, signal: dismiss.signal },
   );
-  // Cross-document iframes swallow pointer and key events, so neither
+  // Cross-document frames swallow pointer and key events, so neither
   // listener above can ever fire while the user interacts with one — the
-  // panel would just hang open. Focus entering an iframe blurs this
-  // window; that is the one signal that does cross the boundary.
+  // panel would just hang open. Focus entering a child context blurs this
+  // window; that is the one signal that does cross the boundary. And when
+  // this instance IS the child (all_frames), every interaction outside
+  // the frame blurs this window with no in-document event at all — the
+  // activeElement here is the badge's retargeted shadow host, never a
+  // frame element, so without the child-frame arm nothing would ever
+  // close (PR #13 review, finding 2). Closing unconditionally on blur in
+  // a child frame also means switching applications dismisses an
+  // in-frame popover; accepted — indistinguishable from departure with
+  // the signals that cross a frame boundary (DECISIONS.md).
   window.addEventListener(
     "blur",
     () => {
-      if (document.activeElement instanceof HTMLIFrameElement) closePopover();
+      if (
+        window.self !== window.top ||
+        hostsChildContext(document.activeElement)
+      ) {
+        closePopover();
+      }
     },
     { signal: dismiss.signal },
   );
@@ -1186,14 +1241,15 @@ function syncIntentSensor(): void {
     "pointerout",
     (event) => {
       // Two "the pointer is gone" shapes. relatedTarget null: it left the
-      // document (window edge, device lift). relatedTarget an iframe: it
-      // crossed into a child document that swallows every further pointer
-      // event (the same blindness the popover's dismiss handles via
-      // window blur) — without this branch, the last reveal would sit
-      // pinned open for as long as the reader works inside the frame.
-      // A touch lift keeps its sticky point (see the state note above);
-      // a touch crossing into an iframe does not.
-      const intoFrame = event.relatedTarget instanceof HTMLIFrameElement;
+      // document (window edge, device lift). relatedTarget a child-context
+      // element (iframe, frameset frame, object/embed): it crossed into a
+      // child document that swallows every further pointer event (the
+      // same blindness the popover's dismiss handles via window blur) —
+      // without this branch, the last reveal would sit pinned open for as
+      // long as the reader works inside the frame. A touch lift keeps its
+      // sticky point (see the state note above); a touch crossing into a
+      // child document does not.
+      const intoFrame = hostsChildContext(event.relatedTarget);
       if (event.relatedTarget !== null && !intoFrame) return;
       if (event.pointerType === "touch") {
         if (!intoFrame) return;
@@ -1504,8 +1560,7 @@ export function syncBadges(
   const { scrollX, scrollY } = window;
   // Still the read phase: after the writes below, these reads would force
   // a synchronous reflow on every popover-open sync.
-  const viewportWidth = document.documentElement.clientWidth;
-  const viewportHeight = document.documentElement.clientHeight;
+  const { width: viewportWidth, height: viewportHeight } = viewportBox();
 
   for (const [element, rect] of moves) {
     positionAt(element, rect, scrollX, scrollY);

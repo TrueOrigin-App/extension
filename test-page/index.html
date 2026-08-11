@@ -162,7 +162,7 @@
         src="/frame.html"
         title="Same-origin iframe fixture"
         width="480"
-        height="420"
+        height="480"
         style="border: 1px solid #ccc"
       ></iframe>
       <figcaption>
@@ -179,7 +179,7 @@
         id="cross-origin-frame"
         title="Cross-origin iframe fixture"
         width="480"
-        height="420"
+        height="480"
         style="border: 1px solid #ccc"
       ></iframe>
       <script>
@@ -216,8 +216,55 @@
         <strong>srcdoc iframe</strong> — an <code>about:srcdoc</code> document
         has no http(s) URL, so injection here rides on
         <code>match_origin_as_fallback</code> (matched via this page's origin).
-        Expected: intent-gated <em>Unknown</em> badge on the framed C.jpg. No
-        badge here means the fallback matching is not working.
+        Expected: intent-gated <em>Unknown</em> badge on the framed C.jpg. Note
+        the narrower <code>match_about_blank</code> would inject here too — the
+        <code>data:</code> frame below is the fixture that isolates the broader
+        key. This document is also doctype-less (quirks mode): its popover must
+        open fully visible inside the frame, not below the frame's fold.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <iframe
+        id="data-url-frame"
+        title="data: URL iframe fixture"
+        width="480"
+        height="230"
+        style="border: 1px solid #ccc"
+      ></iframe>
+      <script>
+        // A data: document is the frame class the §8 owner decision
+        // actually chose match_origin_as_fallback for (match_about_blank
+        // covers about:blank/srcdoc already) — this fixture is what fails
+        // if the manifest is ever narrowed. The frame's origin is opaque,
+        // so its analysis fetches send `Origin: null` and ride the
+        // server's null-origin ACAO carve-out; absolute URL because a
+        // data: document has no base to resolve against.
+        (() => {
+          const frame = document.getElementById("data-url-frame");
+          const src = `${location.origin}/fixtures/ai_declared.png`;
+          frame.src = `data:text/html,${encodeURIComponent(
+            `<body style="font:13px system-ui;margin:0.75rem">` +
+              `<img src="${src}" alt="AI-declared fixture in a data: frame"` +
+              ` style="width:240px;height:150px;object-fit:contain;` +
+              `background:#f2f3f5;display:block">` +
+              `<p><strong>ai_declared.png</strong> in a <code>data:</code>` +
+              ` frame (opaque origin).</p></body>`,
+          )}`;
+        })();
+      </script>
+      <figcaption>
+        <strong>data: URL iframe</strong> — expected:
+        <em>AI — declared</em> badge on the framed image.
+        <em
+          >No badge here means <code>match_origin_as_fallback</code> matching is
+          not working</em
+        >
+        (the srcdoc fixture above cannot tell that apart from
+        <code>match_about_blank</code>). The frame's origin is opaque, so the
+        extension never escalates its images to the worker — the analysis fetch
+        must succeed in-page, uncredentialed, via the server's
+        <code>Origin: null</code> carve-out.
       </figcaption>
     </figure>
 
@@ -233,10 +280,14 @@
         <strong>Tiny iframe</strong> (80×80, same <code>/frame.html</code>) —
         its viewport short side is under the 96px minimum image dimension, so
         the injected script installs nothing (the tiny-frame early-exit;
-        tracking-pixel frames take this path). Expected: no badges, ever, and no
-        analysis requests from this frame in the server log beyond its renders.
-        Growing the frame (e.g. via DevTools) past 96px must revive it: a resize
-        re-runs the boot check and scanning starts.
+        tracking-pixel frames take this path). The framed images keep their
+        fixed 240×150 layout boxes — big enough to pass the
+        <em>per-image</em> size gate — so this fixture discriminates the
+        frame-level guard from the image gate: expected is
+        <em>no badges, ever</em>, and an <em>AI — declared</em> badge peeking
+        out of the clipped frame means the guard is broken. Growing the frame
+        (e.g. via DevTools) past 96px must revive it: a resize re-runs the boot
+        check and scanning starts.
       </figcaption>
     </figure>
 
@@ -311,9 +362,11 @@
     </ul>
     <p>
       In every tier, nothing else — no media bytes, no page URLs. The iframe
-      fixtures add <em>nothing</em> to the worker panel: every framed image is
-      same-origin to its own frame, so in-frame acquisition succeeds and the
-      fallback never fires for them. A fixture URL on the
+      fixtures add <em>nothing</em> to the worker panel: the http(s)-framed
+      images are same-origin to their own frames, so in-frame acquisition
+      succeeds, and the data: frame's opaque-origin instance never escalates to
+      the worker at all (its in-page fetch rides the server's
+      <code>Origin: null</code> carve-out). A fixture URL on the
       <em>page's own host</em> appearing in the worker panel would be a bug (the
       fallback firing for a same-origin image). The cross-host fetch itself
       appears once per analysis attempt: a failed first analysis may
@@ -323,17 +376,22 @@
     </p>
     <p>
       In the <strong>page's</strong> network panel (task 5.2, double-fetch
-      collapse): each same-origin fixture URL appears exactly twice — the render
-      request from the network, then the analysis fetch served from
+      collapse), the pattern is per <em>document</em>: each document — this page
+      and each frame — requests a same-origin fixture URL exactly twice, the
+      render from the network and then the analysis fetch served from
       <em>(disk cache)</em> / <em>(memory cache)</em>, never from the server.
-      The duplicate figure adds no request of its own; the strict-CORS figure
-      adds its render plus two CORS-blocked analysis attempts (both rungs of the
-      in-page ladder — the counts acquire.test.ts pins). The iframe fixtures
-      follow the same per-document pattern: each frame's images show a render
-      plus a from-cache analysis fetch under that frame's origin (the tiny frame
-      shows renders only — its script early-exits before scanning). The server
-      log (one line per hit, with the requested host) makes the same story
-      visible server-side.
+      The panel aggregates every document in the tab, so a fixture the page and
+      both 480px frames display shows up to six entries in total — audit one
+      document at a time with the DevTools frame selector, or via the server
+      log's host column. Within this page's own document the original counts
+      still hold: the duplicate figure adds no request, and the strict-CORS
+      figure adds its render plus two CORS-blocked analysis attempts (both rungs
+      of the in-page ladder — the counts acquire.test.ts pins). Two frames
+      deviate by design: the tiny frame contributes renders only (its script
+      early-exits before scanning), and the data: frame shows its render, one
+      CORS-blocked force-cache attempt (the render's cache entry carries no
+      ACAO), and the uncredentialed revalidation that succeeds — three entries,
+      two server hits.
     </p>
   </body>
 </html>
