@@ -3269,7 +3269,7 @@ chunks inherit it rather than re-deriving.
   allowlist is unchanged; this is detectability, not egress), but the
   write-up should state it honestly. The duplicate-fetch traffic-shape
   observation (5.5 soak notes) likewise now applies inside frames.
-- **Soak watch item (adblocker race):** blockers' *procedural* cosmetic
+- **Soak watch item (adblocker race):** blockers' _procedural_ cosmetic
   filters can hide an ad after our injection + IO delivery + 250 ms
   dwell have all passed. Worst case: a completed local analysis of
   cached bytes, a transient badge cleaned up by the sync pass the hiding
