@@ -1,5 +1,6 @@
 // Paint-aware cover detection (roadmap chunk 3; owner-selected candidate,
-// DECISIONS.md 2026-08-15). The overlay paints above every page stacking
+// DECISIONS.md 2026-08-15; paint semantics tightened in the PR #14 review
+// fixes, same date). The overlay paints above every page stacking
 // context, so page UI stacked above an image — a suggestions dropdown
 // (google.com, corpus entry #1), a modal, a sticky bar — used to get our
 // chip painted on top of it. The recorded rejection of plain hit-test
@@ -9,8 +10,8 @@
 // discriminator this module adds is *paint*: a stretched link or
 // click-capture div is invisible — no background, no backdrop filter, no
 // replaced content — while occluding UI paints pixels. "Covered" therefore
-// means: an element stacked above the image at this point actually paints
-// there.
+// means: elements stacked above the image at this point actually paint
+// there, alone or composited.
 //
 // Known limits, recorded so the next field bug is a lookup:
 // - An overlay with pointer-events: none never enters a hit stack, so an
@@ -27,19 +28,33 @@
 // - Effective opacity multiplies only the candidate's own opacity;
 //   an ancestor at fractional opacity is not walked (checkVisibility
 //   catches the zero case). Over-counting is the accepted direction.
+// - Replaced content is opaque by assumption: a full-size *transparent*
+//   image, video frame, or canvas used as a click shield reads as a cover
+//   (the 0×0/1×1 spacer-img carve-out below catches the classic shield;
+//   pixel readback for the rest is not worth its cost).
+// - A url() background-image is opaque by assumption (its pixels are
+//   unknowable without loading them): a background-image-based
+//   transparent shield or small no-repeat sprite reads as a cover.
+// - Closed shadow roots cannot be pierced: an occluder painted inside one
+//   reads as its (usually unstyled) host — the pre-fix behavior, now
+//   scoped to closed roots only.
+// - A backdrop-filter counts as obscuring only via a strong blur; a
+//   backdrop brightness(0)/contrast(0) that blacks the image out is not
+//   detected (no field sighting; revisit on corpus evidence).
 
-/** Below this effective alpha an element is treated as see-through: hover
- * scrims and dim layers (typically 0.3–0.6) must not hide a chip the
- * reader can still see the image behind. Real occluders are solid or
- * near-solid; glass panels at lower alpha are caught by their backdrop
- * filter instead. */
+/** Below this effective alpha the stack above the image is treated as
+ * see-through: hover scrims and dim layers (typically 0.3–0.6) must not
+ * hide a chip the reader can still see the image behind. Real occluders
+ * are solid or near-solid; glass panels at lower alpha are caught by
+ * their backdrop blur instead. */
 const OPAQUE_ALPHA = 0.9;
 
 /** Replaced/embedded content paints regardless of background — an <img>
  * above the badged image (a carousel's next slide, a settled crossfade
  * frame) is a real cover. Inline <svg> is deliberately absent: its box is
  * routinely far larger than its painted shapes (icon overlays), so it
- * falls through to the background checks instead. */
+ * falls through to the background checks instead (recorded decision,
+ * DECISIONS.md 2026-08-15). */
 const REPLACED_TAGS = new Set([
   "IMG",
   "VIDEO",
@@ -49,58 +64,172 @@ const REPLACED_TAGS = new Set([
   "OBJECT",
 ]);
 
-/** Alpha of a computed background-color. Computed values serialize as
- * rgb()/rgba() (the keyword `transparent` computes to rgba(0, 0, 0, 0));
- * an unrecognized serialization (color(), oklch() — authored wide-gamut
- * color) is far more likely a painted surface than transparency, so it
- * counts as opaque. An empty string (jsdom's unset default) is no paint. */
-function backgroundAlpha(color: string): number {
-  if (!color || color === "transparent") return 0;
-  const match = /^rgba?\((.+)\)$/.exec(color);
-  if (!match || match[1] === undefined) return 1;
-  // Legacy comma form carries alpha as the 4th component; the modern
-  // space-separated form carries it after a slash. No alpha term = 1.
-  const body = match[1];
-  const slashParts = body.split("/");
-  const alphaTerm =
-    slashParts.length === 2 ? slashParts[1] : body.split(",")[3];
-  if (alphaTerm === undefined) return 1;
-  const alpha = parseFloat(alphaTerm);
-  return Number.isFinite(alpha) ? alpha : 1;
+/** Blur radius at and above which a backdrop-filter is treated as
+ * obscuring what lies beneath. Real glass panels run blur(10–16px);
+ * compositing hints (blur(0px)) and color nudges (saturate, slight
+ * brightness) leave the image plainly recognizable and must not hide
+ * its chip forever. */
+const BACKDROP_BLUR_OBSCURES_PX = 8;
+
+/** True unless the element is invisible by opacity — its own computed
+ * opacity 0 or an ancestor's (group opacity multiplies down the tree, so
+ * the engine's own walk does the checking). Both option spellings cover
+ * Chromes on either side of the spec rename; a browser without the API
+ * degrades to "visible". Shared by the cover predicate and the intent
+ * sensor (badge.ts) so the compat quirk lives in exactly one place. */
+export function opacityVisible(element: Element): boolean {
+  return (
+    element.checkVisibility?.({ opacityProperty: true, checkOpacity: true }) ??
+    true
+  );
 }
 
-function hasBackdropFilter(style: CSSStyleDeclaration): boolean {
+/** Alpha of a computed CSS color, whatever function it arrived in.
+ * Computed values carry alpha either as the legacy 4th comma component
+ * (rgba/hsla) or after a slash — the form every modern function shares
+ * (rgb(), oklab(), oklch(), lab(), color(), hwb() …), with number or
+ * percentage terms. `transparent` computes to rgba(0, 0, 0, 0) but is
+ * handled for scripted styles. A serialization with no recognizable
+ * alpha term counts as opaque — an authored color is a painted surface —
+ * and an empty string (jsdom's unset default) is no paint. */
+function colorAlpha(color: string): number {
+  if (!color || color === "transparent") return 0;
+  const match = /^([a-z-]+)\((.+)\)$/i.exec(color);
+  if (!match || match[2] === undefined) return 1;
+  const body = match[2];
+  const slashParts = body.split("/");
+  const alphaTerm =
+    slashParts.length === 2
+      ? slashParts[1]
+      : /^(?:rgba?|hsla?)$/i.test(match[1] ?? "")
+        ? body.split(",")[3]
+        : undefined;
+  if (alphaTerm === undefined) return 1;
+  const term = alphaTerm.trim();
+  const alpha = parseFloat(term);
+  if (!Number.isFinite(alpha)) return 1;
+  return term.endsWith("%") ? alpha / 100 : alpha;
+}
+
+/** Guaranteed paint alpha of a background-image at any point it covers.
+ * url() content is unknowable without its pixels and counts as opaque
+ * (recorded limit). Gradients carry their colors in the serialization,
+ * and alpha interpolates linearly between stops, so the minimum stop
+ * alpha is a floor on the gradient's alpha everywhere it paints — which
+ * is the honest answer for caption-legibility gradients (opaque at one
+ * edge, fully transparent at the other): they guarantee nothing at the
+ * probe point and must not hide the chip, while a gradient whose every
+ * stop is opaque paints opaque everywhere. Unparseable → opaque, same
+ * rationale as colors. */
+function backgroundImageAlpha(backgroundImage: string): number {
+  if (!backgroundImage || backgroundImage === "none") return 0;
+  if (backgroundImage.includes("url(")) return 1;
+  const colors = backgroundImage.match(
+    /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^()]*\)/gi,
+  );
+  if (!colors) return 1;
+  let min = 1;
+  for (const color of colors) {
+    min = Math.min(min, colorAlpha(color));
+  }
+  return min;
+}
+
+/** Whether a backdrop-filter genuinely obscures the backdrop. A backdrop
+ * filter *transforms* what is beneath — it never makes the element
+ * opaque — so only a strong blur counts; anything else falls through to
+ * the background checks. */
+function backdropObscures(style: CSSStyleDeclaration): boolean {
   const value =
     style.backdropFilter ||
     (style as { webkitBackdropFilter?: string }).webkitBackdropFilter;
-  return typeof value === "string" && value !== "" && value !== "none";
-}
-
-/** Whether an element visibly paints its own box: replaced content, a
- * background image (gradients included — scrims mean to be seen), a
- * backdrop filter (visibly alters what is beneath at any fill alpha), or
- * a background color whose alpha — times the element's own opacity —
- * clears the threshold. checkVisibility is the engine's opacity walk for
- * the zero case up the ancestor chain; absent API degrades to "paints". */
-function paints(element: Element): boolean {
-  if (
-    element.checkVisibility?.({
-      opacityProperty: true,
-      checkOpacity: true,
-    }) === false
-  ) {
+  if (typeof value !== "string" || value === "" || value === "none") {
     return false;
   }
+  let maxBlur = 0;
+  for (const blur of value.matchAll(/blur\(\s*([\d.]+)px\s*\)/g)) {
+    maxBlur = Math.max(maxBlur, parseFloat(blur[1] ?? "0"));
+  }
+  return maxBlur >= BACKDROP_BLUR_OBSCURES_PX;
+}
+
+/** Replaced content paints its box regardless of background — except an
+ * <img> with no decodable frame (broken, still loading) or a 1×1 spacer
+ * stretched over the content, the classic transparent click-shield: both
+ * paint nothing worth yielding to and fall through to the background
+ * checks. tagName is uppercased for XHTML documents, where HTML tag
+ * names stay lowercase. */
+function replacedPaints(element: Element): boolean {
+  if (!REPLACED_TAGS.has(element.tagName.toUpperCase())) return false;
+  if (element instanceof HTMLImageElement) {
+    const { naturalWidth, naturalHeight } = element;
+    if (naturalWidth === 0 || naturalHeight === 0) return false;
+    if (naturalWidth === 1 && naturalHeight === 1) return false;
+  }
+  return true;
+}
+
+/** The effective alpha an element's own box contributes at a point it
+ * covers: replaced content and obscuring glass count as full-alpha
+ * surfaces; otherwise the stronger of its background color and its
+ * background image's guaranteed alpha — everything multiplied by the
+ * element's own opacity. checkVisibility is the engine's opacity walk
+ * for the zero case up the ancestor chain; absent API degrades to
+ * "paints". */
+function paintAlpha(element: Element): number {
+  if (!opacityVisible(element)) return 0;
   const style = getComputedStyle(element);
   const ownOpacity = parseFloat(style.opacity);
   const factor = Number.isFinite(ownOpacity) ? ownOpacity : 1;
-  const alpha =
-    REPLACED_TAGS.has(element.tagName) ||
-    (style.backgroundImage && style.backgroundImage !== "none") ||
-    hasBackdropFilter(style)
-      ? 1
-      : backgroundAlpha(style.backgroundColor);
-  return alpha * factor >= OPAQUE_ALPHA;
+  if (replacedPaints(element) || backdropObscures(style)) return factor;
+  const alpha = Math.max(
+    colorAlpha(style.backgroundColor),
+    backgroundImageAlpha(style.backgroundImage),
+  );
+  return alpha * factor;
+}
+
+/** Expands shadow hosts in a document-level hit stack into the shadow
+ * elements actually painting at the point. document.elementsFromPoint
+ * retargets every shadow-tree hit to its host, so an unstyled host
+ * wrapping an opaque shadow-tree panel would otherwise read as "paints
+ * nothing" — the modal-over-image class on web-component pages. Each
+ * open host is replaced by its own shadow stack at the point, filtered
+ * to the host's subtree (a shadow root's elementsFromPoint can report
+ * outside elements too), recursively, with the host kept after its
+ * content: the host's own box still paints, and when it slots the badged
+ * image the inner stack holds the image itself, so the walk's stop fires
+ * on the real flat-tree geometry instead of the light tree. Closed
+ * shadow roots cannot be pierced (recorded limit); absent API (jsdom)
+ * leaves the stack untouched. */
+export function flattenShadowStack(
+  stack: readonly Element[],
+  x: number,
+  y: number,
+  seen: Set<ShadowRoot> = new Set(),
+): Element[] {
+  const flat: Element[] = [];
+  for (const element of stack) {
+    const root = element.shadowRoot;
+    if (
+      root &&
+      !seen.has(root) &&
+      typeof root.elementsFromPoint === "function"
+    ) {
+      seen.add(root);
+      const inner = root
+        .elementsFromPoint(x, y)
+        .filter(
+          (candidate) =>
+            candidate !== element &&
+            (root.contains(candidate) || element.contains(candidate)),
+        );
+      flat.push(...flattenShadowStack(inner, x, y, seen), element);
+    } else {
+      flat.push(element);
+    }
+  }
+  return flat;
 }
 
 /**
@@ -113,16 +242,23 @@ function paints(element: Element): boolean {
  * image never enters a hit stack, so its opaque card parent would
  * otherwise read as a cover over every such image; and the page's own
  * body/html backgrounds terminate every stack without counting.
+ *
+ * Layers composite on the way down: translucent UI stacked on translucent
+ * UI can be visually solid even though no single layer clears the
+ * threshold (a half-alpha scrim under a 0.7-alpha card). Source-over
+ * accumulation is the same math the compositor runs.
  */
 export function isOpaqueCoverAt(
   stack: readonly Element[],
   image: HTMLImageElement,
   overlayHost: Element | null,
 ): boolean {
+  let accumulated = 0;
   for (const element of stack) {
     if (element === overlayHost) continue;
     if (element === image || element.contains(image)) return false;
-    if (paints(element)) return true;
+    accumulated += (1 - accumulated) * paintAlpha(element);
+    if (accumulated >= OPAQUE_ALPHA) return true;
   }
   return false;
 }

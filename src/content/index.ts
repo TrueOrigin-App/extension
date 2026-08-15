@@ -400,6 +400,17 @@ function installPageListeners(): void {
   window.addEventListener("resize", scheduleSync);
   // Scroll events don't bubble; capture also catches inner scrollers.
   document.addEventListener("scroll", scheduleSync, true);
+  // Overlays that animate into or out of place settle *after* the sync
+  // their triggering mutation scheduled: a fading-in dropdown is probed
+  // ~1 frame in at effective alpha ≈ 0 (never a cover, then painted
+  // over once landed), and a class-toggled fade-out would leave its
+  // chips yielded until an unrelated trigger. The settle moment fires
+  // exactly these events, so re-probe there. (An instant :hover reveal
+  // with no transition fires nothing at all — recorded limit; probing
+  // on pointermove was rejected as a standing per-move hit-test cost on
+  // every badged page.)
+  document.addEventListener("transitionend", scheduleSync, true);
+  document.addEventListener("animationend", scheduleSync, true);
   // Capture-phase load events from images/iframes/embeds anywhere in the
   // page — each one can shift layout below it without any DOM mutation.
   document.addEventListener("load", scheduleSync, true);

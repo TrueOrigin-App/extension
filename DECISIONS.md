@@ -3507,3 +3507,139 @@ hit-test variant.
   (single `*` stops at the first path segment).
 - Owner confirmed in conversation (2026-08-15) after the safety
   analysis; rides in the chunk-3 PR (#14) whose review notes raised it.
+
+## 2026-08-15 — PR #14 review fixes: paint-semantics honesty, probe geometry, badge polish
+
+The xhigh review of PR #14 returned 15 findings (11 confirmed, 4
+plausible); all were applied in one wave on the chunk-3 branch. The
+correctness theme: the cover heuristic over-counted paint in four
+independent ways (any background-image, any backdrop-filter, any
+replaced element, any unparsed color = opaque), each of which
+re-admitted a variant of the misfire class the module exists to exclude
+— chips hidden under layers the reader plainly sees the image through.
+Free choices made while fixing, with alternatives:
+
+### cover.ts paint semantics
+
+- **Inline `<svg>` exclusion — retro-recorded** (review finding: the
+  choice lived only in a code comment, violating the "record every free
+  choice" convention). What: `<svg>` is deliberately absent from
+  REPLACED_TAGS. Why: its box is routinely far larger than its painted
+  shapes (icon overlays), so it falls through to the background checks.
+  Rejected: treating it as replaced content — icon-overlay false covers.
+  **Known limit:** an opaque inline-SVG panel with no background on any
+  containing box reads as uncovered.
+- **Gradient alpha = minimum stop alpha.** Alpha interpolates linearly
+  between stops, so the min stop alpha floors the gradient everywhere it
+  paints: all-opaque-stops gradients cover; caption-legibility gradients
+  (opaque → transparent) guarantee nothing at the probe point and no
+  longer hide chips. Rejected: evaluating the gradient's actual alpha at
+  the probe point (requires reproducing gradient geometry per element —
+  cost and fragility out of proportion to a one-point heuristic);
+  rejected: keeping "any background-image = opaque" (the finding's
+  YouTube/news-card gradient hid every chip on card-grid pages).
+- **`url()` backgrounds stay opaque-by-assumption.** Their pixels are
+  unknowable without loading them; a texture/photo panel background is a
+  real cover. **Known limit:** background-image-based transparent
+  shields and small no-repeat sprites false-cover.
+- **Generic slash-alpha color parsing.** Any functional color's
+  `/ alpha` term now parses (number or percentage) — oklab/oklch/color()
+  included, which is Tailwind v4's entire opacity system; the legacy
+  comma-form alpha stays scoped to rgba()/hsla(). A serialization with
+  no recognizable alpha term still counts as opaque (authored color =
+  painted surface, unchanged rationale).
+- **Backdrop-filter obscures only via blur ≥ 8px.** A backdrop filter
+  transforms the backdrop — it never makes the element opaque — so
+  saturate()/brightness nudges and blur(0px) compositing hints no longer
+  hide chips permanently. 8px sits between compositing-hint blurs and
+  real glass (10–16px). Rejected: any-filter-counts (the shipped
+  behavior; unbounded false covers); rejected: filter-strength scoring
+  beyond blur. **Known limit:** a backdrop brightness(0)/contrast(0)
+  that blacks the image out is undetected (no field sighting).
+- **Stack compositing.** The walk now accumulates source-over alpha
+  (`a += (1−a)·layer`) instead of testing each layer against 0.9 in
+  isolation: a 0.7-alpha card over a 0.7-alpha scrim (0.91 composite)
+  covers. The 0.9 threshold itself is unchanged (recorded owner-adjacent
+  choice above).
+- **Replaced-content carve-out for shield images.** An `<img>` with no
+  decodable frame (naturalWidth/Height 0) or a 1×1 spacer no longer
+  counts as paint — the classic stretched-spacer click shield hid every
+  chip on the site forever. Rejected: pixel readback (canvas draw +
+  getImageData per probe) — cost, taint restrictions. tagName is now
+  uppercased so XHTML documents (lowercase tag names) match the set at
+  all. **Known limit:** full-size transparent images, canvases, and
+  video frames still false-cover.
+- **Shadow-DOM piercing (open roots).** document.elementsFromPoint
+  retargets shadow-tree hits to their host, so an unstyled host wrapping
+  an opaque shadow panel read as "paints nothing" — the modal-over-image
+  class on web-component pages — and a host slotting the badged image
+  hit the light-tree ancestor stop before its shadow occluder was ever
+  tested. flattenShadowStack expands each open host into its own
+  shadow stack at the point (filtered to the host's subtree, host kept
+  after its content, recursive, cycle-guarded). Rejected: walking
+  shadowRoot children by z-index heuristics (re-implements hit
+  testing). **Known limit:** closed shadow roots cannot be pierced —
+  pre-fix behavior, now scoped to them alone.
+- **opacityVisible shared helper.** The dual-spelling checkVisibility
+  probe (spec-rename compat) now lives once in cover.ts, imported by the
+  intent sensor — the compat quirk was duplicated with its rationale
+  attached to only one copy.
+
+### Probe geometry and sync triggers
+
+- **Probe clamps into chip ∩ viewport.** elementsFromPoint answers []
+  outside the viewport, and the probe center leaves the viewport half a
+  chip before the chip's box does — a chip half-scrolled under an opaque
+  fixed bar un-hid its sliver and painted it over the bar (a 14px band
+  per edge, at max z-index). The probe now clamps to the nearest point
+  inside both the chip's box and the viewport; only a fully offscreen
+  chip resolves uncovered probe-free. Zero-size viewport readings
+  (jsdom) skip the clamp.
+- **transitionend/animationend re-probe.** Animated overlays settle
+  after the sync their triggering mutation scheduled: fade-ins were
+  probed ~1 frame in at alpha ≈ 0 (never covers), fade-outs stranded
+  covered chips indefinitely. Capture-phase document listeners on both
+  events now schedule the rAF-coalesced sync. Rejected:
+  pointermove-driven probing (a standing per-move hit-test cost on every
+  badged page) — which leaves **a known limit:** an instant `:hover`
+  reveal with no transition/animation fires no event and is probed only
+  at the next unrelated trigger.
+
+### Badge behavior and structure
+
+- **Deferred sweep (data-sweep-pending).** Opacity does not pause CSS
+  animations, so a chip born covered burned its one-shot sweep at
+  opacity 0 and never showed the design contract's one authored motion
+  moment. Sweep-owing paths now arm `data-sweep-pending`; applyCovered —
+  the single data-covered writer — plays it at the uncover (skipping
+  presence-hidden chips, whose reveal re-arms it). This also removed the
+  redundant double sweep on the pending→Unknown handoff.
+- **Reveal repositions before it probes.** revealIntentBadge placed the
+  chip nowhere while probing a fresh rect (mirror-fixed to match
+  revealPendingChip); both reveal paths and renderBadge now read (rect,
+  probe) strictly before writing (positionAt, attributes), removing one
+  forced synchronous reflow per verdict render. revealPendingChip gained
+  the missing already-revealed early return (it re-probed and re-placed
+  on every pointermove over the image).
+- **Covered tri-state removed.** syncBadges wrote `null` ("leave
+  alone") for presence-hidden chips, leaving `data-covered="true"` stale
+  indefinitely on hidden chips — unreachable as a visual bug today, but
+  the covered CSS outranks the presence rule, so any future
+  reveal-bypassing path would flip it live. Hidden chips still skip the
+  probe (the cost bound stands) but now write `false` — observably
+  identical at opacity 0, and the staleness is gone.
+- **Chip geometry named once.** CHIP_ANCHOR_PX (8) and CHIP_SIZE_PX (28)
+  now derive the stylesheet height, positionAt's anchor, the popover's
+  anchor math, and the probe offset (anchor + size/2 = 22); the
+  hand-derived copies could drift silently, with the unit tests pinning
+  the stale product. The tests deliberately keep literal expectations
+  (32, 42) — with the source derived, the literals become a real
+  tripwire instead of agreeing with stale arithmetic.
+
+### Verification
+
+- 289/289 tests pass (12 new: gradient stops, url(), backdrop nuance,
+  spacer shields, XHTML case, compositing, modern-color alpha, shadow
+  piercing ×3, probe clamp ×2, deferred sweep, stale-cover cleanup);
+  typecheck clean. The pre-existing (32, 42) probe pin and the
+  0.45-scrim / stretched-link / dropdown fixtures pass untouched.
