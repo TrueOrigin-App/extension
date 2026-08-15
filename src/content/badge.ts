@@ -15,6 +15,7 @@
 // pointer-events: none.
 
 import type { WireVerdict } from "../messaging/protocol";
+import { flattenShadowStack, isOpaqueCoverAt, opacityVisible } from "./cover";
 import { buildPopoverContent } from "./popover";
 import { CHECKING_LABEL, POPOVER_STRINGS, VERDICT_LABELS } from "./labels";
 import { buildRing, ringStateForChecking, ringStateForVerdict } from "./ring";
@@ -72,6 +73,13 @@ const CONTAINED_EVENT_TYPES = [
   "wheel",
 ] as const;
 
+/** Chip geometry, named once and derived everywhere it appears: the
+ * stylesheet's chip height, positionAt's anchor offset, the popover's
+ * anchor math, and the cover probe all read these two — a resize or
+ * anchor change cannot silently strand a stale hand-derived copy. */
+const CHIP_ANCHOR_PX = 8;
+const CHIP_SIZE_PX = 28;
+
 // Evidence Ring presentation (Phase 3 visual world — DECISIONS.md,
 // 2026-08-05; surface brief at .impeccable/surfaces/src-content-badge-ts.md).
 // Dark-glass chip and panel, one functional hue per verdict class (never
@@ -99,7 +107,7 @@ const BADGE_STYLE = `
     box-sizing: border-box;
     display: inline-flex;
     align-items: center;
-    height: 28px;
+    height: ${CHIP_SIZE_PX}px;
     margin: 0;
     padding: 2px;
     border: 0;
@@ -170,6 +178,26 @@ const BADGE_STYLE = `
   .badge[data-presence="hidden"] {
     opacity: 0;
     pointer-events: none;
+  }
+  /* Occlusion yield (roadmap chunk 3, owner-selected 2026-08-15): the
+     probe found page UI that actually paints stacked above the image at
+     the chip's own spot — a dropdown, a modal, a sticky bar. The truthful
+     render is "behind that UI", and the closest an overlay pinned above
+     every page stacking context can get is not painting at all. The hide
+     is instant (a fade would linger over the panel); the restore, when
+     the cover goes, takes the normal fade. Keyboard focus and an open
+     panel override: a focus indicator must stay visible (AA floor), and
+     a covered badge under its own open dialog would strand the panel on
+     an invisible button. */
+  .badge[data-covered="true"] {
+    opacity: 0;
+    pointer-events: none;
+    transition: none;
+  }
+  .badge[data-covered="true"]:focus-visible,
+  .badge[data-covered="true"][aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
   }
   .badge .ring {
     width: 24px;
@@ -587,8 +615,72 @@ function positionAt(
     return;
   }
   badge.style.display = "";
-  badge.style.left = `${rect.left + scrollX + 8}px`;
-  badge.style.top = `${rect.top + scrollY + 8}px`;
+  badge.style.left = `${rect.left + scrollX + CHIP_ANCHOR_PX}px`;
+  badge.style.top = `${rect.top + scrollY + CHIP_ANCHOR_PX}px`;
+}
+
+// The cover probe point: the visual center of the chip (image top-left +
+// the positionAt anchor + half the chip). One point is the deliberate
+// compromise — a heuristic answering "is the chip behind page UI here",
+// not sub-pixel geometry.
+const CHIP_PROBE_OFFSET_PX = CHIP_ANCHOR_PX + CHIP_SIZE_PX / 2;
+
+/** Whether page UI that actually paints is stacked above the image at the
+ * chip's spot (cover.ts owns the paint semantics). A pure read — callers
+ * keep it in their read phase; the probe point is in viewport
+ * coordinates. The probe center leaves the viewport half a chip before
+ * the chip's box does, and elementsFromPoint answers [] outside the
+ * viewport — which must not un-hide the sliver of a chip half-scrolled
+ * under an opaque fixed bar — so the probe clamps to the nearest point
+ * still inside both the chip and the viewport, and only a fully
+ * offscreen chip resolves to uncovered for free. Absent APIs (jsdom
+ * without the test shim) and a zero-size viewport reading (jsdom's
+ * default) skip the clamp. */
+function chipCoveredAt(rect: DOMRect, image: HTMLImageElement): boolean {
+  if (isCollapsed(rect)) return false;
+  let x = rect.left + CHIP_PROBE_OFFSET_PX;
+  let y = rect.top + CHIP_PROBE_OFFSET_PX;
+  const viewport = viewportBox();
+  if (viewport.width > 0 && viewport.height > 0) {
+    const xMin = Math.max(rect.left + CHIP_ANCHOR_PX, 0);
+    const xMax =
+      Math.min(rect.left + CHIP_ANCHOR_PX + CHIP_SIZE_PX, viewport.width) - 1;
+    const yMin = Math.max(rect.top + CHIP_ANCHOR_PX, 0);
+    const yMax =
+      Math.min(rect.top + CHIP_ANCHOR_PX + CHIP_SIZE_PX, viewport.height) - 1;
+    if (xMin > xMax || yMin > yMax) return false;
+    x = Math.min(Math.max(x, xMin), xMax);
+    y = Math.min(Math.max(y, yMin), yMax);
+  }
+  const stack = document.elementsFromPoint?.(x, y);
+  if (!stack) return false;
+  return isOpaqueCoverAt(
+    flattenShadowStack(stack, x, y),
+    image,
+    shadowRoot?.host ?? null,
+  );
+}
+
+/** The one writer of data-covered, so the attribute always round-trips
+ * through the same shape the stylesheet matches. Uncovering also settles
+ * a deferred sweep (data-sweep-pending): the one authored motion moment
+ * must not burn invisibly at opacity 0, so a chip whose sweep came due
+ * while it was covered draws its arc the first time the reader can
+ * actually see it. Presence-hidden chips keep the debt — their reveal
+ * path re-arms it anyway. */
+function applyCovered(element: HTMLElement, covered: boolean): void {
+  if (covered) {
+    element.dataset["covered"] = "true";
+    return;
+  }
+  delete element.dataset["covered"];
+  if (
+    element.dataset["sweepPending"] !== undefined &&
+    element.dataset["presence"] !== "hidden"
+  ) {
+    delete element.dataset["sweepPending"];
+    playSweep(element);
+  }
 }
 
 /** Every layout read popover placement needs, gathered by the caller —
@@ -628,11 +720,11 @@ function placePopover(popover: HTMLDivElement, place: PopoverPlacement): void {
     viewportWidth,
     viewportHeight,
   } = place;
-  const ideal = rect.left + scrollX + 8;
+  const ideal = rect.left + scrollX + CHIP_ANCHOR_PX;
   const maxLeft = scrollX + viewportWidth - popoverWidth - 8;
   popover.style.left = `${Math.max(scrollX + 8, Math.min(ideal, maxLeft))}px`;
-  const belowTop = rect.top + 8 + badgeHeight + 6;
-  const aboveTop = rect.top + 8 - 6 - popoverHeight;
+  const belowTop = rect.top + CHIP_ANCHOR_PX + badgeHeight + 6;
+  const aboveTop = rect.top + CHIP_ANCHOR_PX - 6 - popoverHeight;
   let side = popover.dataset["side"];
   if (side !== "below" && side !== "above") {
     const fitsBelow = belowTop + popoverHeight <= viewportHeight - 8;
@@ -941,8 +1033,12 @@ function togglePopover(image: HTMLImageElement): void {
 const INTENT_HIDE_DELAY_MS = 200;
 
 /** Restarts the sweep-on animation, replaying the arc's draw to its honest
- * band: on first paint, on a verdict change, and on every intent reveal. */
-function playSweep(element: HTMLButtonElement): void {
+ * band: on first visible paint, on a verdict change, and on every intent
+ * reveal. Callers that find the chip covered set data-sweep-pending
+ * instead and applyCovered plays the sweep at the uncover — opacity does
+ * not pause CSS animations, so playing it under a cover would burn the
+ * one authored motion moment invisibly. */
+function playSweep(element: HTMLElement): void {
   element.classList.remove("enter");
   // Forcing style resolution restarts the animation when the class returns.
   void element.offsetWidth;
@@ -956,11 +1052,29 @@ function cancelHide(entry: BadgeEntry): void {
   }
 }
 
-function revealIntentBadge(entry: BadgeEntry): void {
+function revealIntentBadge(image: HTMLImageElement, entry: BadgeEntry): void {
   cancelHide(entry);
   if (entry.element.dataset["presence"] !== "hidden") return;
+  // A reveal can land while the image sits under an opaque page layer:
+  // the sensor deliberately senses through overlays (Instagram's
+  // click-capture div, 2026-08-06), so a pointer resting on Google's
+  // dropdown still reveals the buried image's chip — which must then not
+  // paint over the dropdown. Refresh the cover verdict at the moment of
+  // showing (reads complete before the writes below); sync passes skip
+  // presence-probe work for hidden chips, so this is also what un-stales
+  // a verdict left over from the previous reveal.
+  const rect = image.getBoundingClientRect();
+  const covered = chipCoveredAt(rect, image);
   entry.element.dataset["presence"] = "shown";
-  playSweep(entry.element);
+  // The sweep is owed on every reveal; applyCovered plays it immediately
+  // when uncovered and holds it for the uncover when not.
+  entry.element.dataset["sweepPending"] = "true";
+  // A reveal can also land after layout moved the image but before the
+  // rAF-coalesced sync repositions the chip: place it against the same
+  // rect the cover verdict just described, never a stale painted spot
+  // (mirror of revealPendingChip).
+  positionAt(entry.element, rect, window.scrollX, window.scrollY);
+  applyCovered(entry.element, covered);
 }
 
 /** The one "never hide under the reader" predicate, shared by gate
@@ -1027,9 +1141,11 @@ function syncIntentGate(image: HTMLImageElement, entry: BadgeEntry): void {
     signal,
   });
   entry.element.addEventListener("pointerleave", hide, { signal });
-  entry.element.addEventListener("focusin", () => revealIntentBadge(entry), {
-    signal,
-  });
+  entry.element.addEventListener(
+    "focusin",
+    () => revealIntentBadge(image, entry),
+    { signal },
+  );
   entry.element.addEventListener("focusout", hide, { signal });
   syncIntentSensor();
 }
@@ -1106,20 +1222,12 @@ function hitStackAt(x: number, y: number): Element[] {
   return stack;
 }
 
-/** True unless the image is invisible by opacity — its own computed
- * opacity 0 or an ancestor's (group opacity multiplies down the tree, so
- * the engine's own walk does the checking). Both option spellings cover
- * Chromes on either side of the spec rename; a browser without the API
- * degrades to "visible", i.e. plain topmost-wins. Only opacity needs
- * asking about: every other way to be invisible at a point —
- * display:none, visibility:hidden, clip, transform, pointer-events:none —
- * already excludes an element from hit-test stacks. */
-function imageVisiblyPresent(image: HTMLImageElement): boolean {
-  return (
-    image.checkVisibility?.({ opacityProperty: true, checkOpacity: true }) ??
-    true
-  );
-}
+// Opacity is the only invisibility that needs asking about here: every
+// other way to be invisible at a point — display:none, visibility:hidden,
+// clip, transform, pointer-events:none — already excludes an element from
+// hit-test stacks. The check itself (opacityVisible) lives in cover.ts,
+// shared with the paint predicate so the checkVisibility compat quirk has
+// exactly one home.
 
 /** The image the pointer at this stack's point visually rests on: the
  * topmost image the reader can actually see. elementsFromPoint reports
@@ -1142,7 +1250,7 @@ function topImageAt(stack: Element[]): HTMLImageElement | null {
     if (element instanceof HTMLImageElement) images.push(element);
   }
   if (images.length <= 1) return images[0] ?? null;
-  return images.find(imageVisiblyPresent) ?? images[0] ?? null;
+  return images.find(opacityVisible) ?? images[0] ?? null;
 }
 
 /** True when a pointer's last known position rests on the image — page
@@ -1192,7 +1300,7 @@ function processPointerAt(stack: Element[]): void {
   for (const [image, entry] of badges) {
     if (!entry.gate) continue;
     if (image === topImage) {
-      revealIntentBadge(entry);
+      revealIntentBadge(image, entry);
     } else if (entry.element.dataset["presence"] === "shown") {
       scheduleIntentHide(image, entry);
     }
@@ -1295,23 +1403,30 @@ function revealPendingChip(image: HTMLImageElement, entry: PendingEntry): void {
     clearTimeout(entry.hideTimer);
     entry.hideTimer = null;
   }
+  // Already revealed: the sync pass keeps the chip anchored, probed, and
+  // adopted through host rebuilds (a torn-out host is a mutation, and
+  // syncBadges runs ensureHost) — repeating that work here would add a
+  // hit test and a forced layout read per pointermove over the image.
+  if (entry.element) return;
   const rect = image.getBoundingClientRect();
   if (isCollapsed(rect)) return;
-  // ensureHost even when the chip already exists: a page that tore out
-  // the host would otherwise leave it stranded in the detached shadow
-  // root (the rebuild's adoption loop re-parents it).
+  // Probe before the writes below; the chip cannot occlude its own probe
+  // (the overlay host is skipped by the walk), so probing first answers
+  // identically and never forces a reflow.
+  const covered = chipCoveredAt(rect, image);
   const root = ensureHost();
-  if (!entry.element) {
-    const chip = document.createElement("div");
-    chip.className = "badge pending";
-    chip.setAttribute("role", "status");
-    chip.setAttribute("aria-label", CHECKING_LABEL);
-    chip.append(buildRing(ringStateForChecking(), "ring"));
-    entry.element = chip;
-    root.append(chip);
-    if (statusRegion) statusRegion.textContent = CHECKING_LABEL;
-  }
-  positionAt(entry.element, rect, window.scrollX, window.scrollY);
+  const chip = document.createElement("div");
+  chip.className = "badge pending";
+  chip.setAttribute("role", "status");
+  chip.setAttribute("aria-label", CHECKING_LABEL);
+  chip.append(buildRing(ringStateForChecking(), "ring"));
+  entry.element = chip;
+  root.append(chip);
+  if (statusRegion) statusRegion.textContent = CHECKING_LABEL;
+  positionAt(chip, rect, window.scrollX, window.scrollY);
+  // Same yield as verdict badges: a checking chip revealed through an
+  // opaque page layer must not trace its ring on top of that layer.
+  applyCovered(chip, covered);
 }
 
 function schedulePendingHide(entry: PendingEntry): void {
@@ -1421,24 +1536,40 @@ export function renderBadge(
   // pending-entry change too (a strong verdict resolving the last
   // pending image must still uninstall the sensor).
   syncIntentSensor();
-  // Reveal continuity: a verdict landing while the reader watches the
-  // tracing chip must not blink out — the gated badge takes over shown.
-  if (pendingWasVisible && entry.element.dataset["presence"] === "hidden") {
-    revealIntentBadge(entry);
-    scheduleIntentHide(image, entry);
-  }
-  // Sweep on first paint and on a verdict change — never on positional
-  // re-renders. Intent-hidden badges sweep at reveal instead.
-  if (
-    entry.element.dataset["presence"] !== "hidden" &&
-    (!previousVerdict || previousVerdict.verdict !== verdict.verdict)
-  ) {
-    playSweep(entry.element);
-  }
-
   const rect = image.getBoundingClientRect();
   const { scrollX, scrollY } = window;
-  positionAt(entry.element, rect, scrollX, scrollY);
+  // Reveal continuity: a verdict landing while the reader watches the
+  // tracing chip must not blink out — the gated badge takes over shown.
+  // revealIntentBadge repositions, re-probes cover, and arms the sweep
+  // itself, so this path skips the equivalent work below rather than
+  // probing the same point twice in one call.
+  if (pendingWasVisible && entry.element.dataset["presence"] === "hidden") {
+    revealIntentBadge(image, entry);
+    scheduleIntentHide(image, entry);
+  } else {
+    const shown = entry.element.dataset["presence"] !== "hidden";
+    // Probe while layout is still clean: positionAt writes style, and a
+    // probe after it would force one synchronous reflow per verdict
+    // render. The answer is identical either side of the move — the only
+    // hit-test difference is our own chip, which retargets to the
+    // overlay host and is skipped by the walk.
+    const covered = shown ? chipCoveredAt(rect, image) : null;
+    positionAt(entry.element, rect, scrollX, scrollY);
+    // Sweep on first paint and on a verdict change — never on positional
+    // re-renders. Intent-hidden badges sweep at reveal instead, and a
+    // chip born covered holds its sweep for the uncover (applyCovered).
+    if (
+      shown &&
+      (!previousVerdict || previousVerdict.verdict !== verdict.verdict)
+    ) {
+      entry.element.dataset["sweepPending"] = "true";
+    }
+    // A verdict landing under an already-open page layer (dropdown,
+    // modal) must be born yielded, not flash over it until the next sync
+    // pass. Presence-hidden chips keep their reveal-time verdict instead
+    // — the reveal path recomputes at the moment of showing.
+    if (covered !== null) applyCovered(entry.element, covered);
+  }
 
   // A re-render while this image's popover is open must not leave stale
   // detail on screen.
@@ -1522,7 +1653,15 @@ export function syncBadges(
 
   const removed: HTMLImageElement[] = [];
   const stale: HTMLImageElement[] = [];
-  const moves: Array<[HTMLElement, DOMRect]> = [];
+  // The cover verdict rides along as a third member. Presence-hidden
+  // chips skip the probe — they are invisible either way, and the skip
+  // bounds the per-frame hit-test cost to chips a reader can actually
+  // see (the reveal path recomputes for them at the moment of showing) —
+  // but still write covered=false: observably identical at opacity 0,
+  // and it clears a stale data-covered that would otherwise outlive the
+  // conditions it described. The probe is a read (elementsFromPoint +
+  // computed styles), so it stays in this gather phase.
+  const moves: Array<[HTMLElement, DOMRect, boolean]> = [];
   let popoverMove: {
     rect: DOMRect;
     width: number;
@@ -1536,7 +1675,11 @@ export function syncBadges(
       stale.push(image);
     } else {
       const rect = image.getBoundingClientRect();
-      moves.push([element, rect]);
+      const covered =
+        element.dataset["presence"] === "hidden"
+          ? false
+          : chipCoveredAt(rect, image);
+      moves.push([element, rect, covered]);
       if (openPopover?.image === image) {
         popoverMove = {
           rect,
@@ -1547,12 +1690,15 @@ export function syncBadges(
       }
     }
   }
-  const pendingMoves: Array<[HTMLElement, DOMRect]> = [];
+  const pendingMoves: Array<[HTMLElement, DOMRect, boolean]> = [];
   const pendingGone: PendingEntry[] = [];
   for (const [image, entry] of pending) {
     if (!entry.element) continue;
     if (image.isConnected) {
-      pendingMoves.push([entry.element, image.getBoundingClientRect()]);
+      // A pending chip element exists only while revealed, so every one
+      // gets a fresh cover verdict.
+      const rect = image.getBoundingClientRect();
+      pendingMoves.push([entry.element, rect, chipCoveredAt(rect, image)]);
     } else {
       pendingGone.push(entry);
     }
@@ -1562,12 +1708,14 @@ export function syncBadges(
   // a synchronous reflow on every popover-open sync.
   const { width: viewportWidth, height: viewportHeight } = viewportBox();
 
-  for (const [element, rect] of moves) {
+  for (const [element, rect, covered] of moves) {
     positionAt(element, rect, scrollX, scrollY);
+    applyCovered(element, covered);
   }
   // positionAt hides a chip whose image collapsed, same rule as badges.
-  for (const [element, rect] of pendingMoves) {
+  for (const [element, rect, covered] of pendingMoves) {
     positionAt(element, rect, scrollX, scrollY);
+    applyCovered(element, covered);
   }
   for (const entry of pendingGone) {
     removePendingChip(entry);

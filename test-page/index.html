@@ -291,6 +291,124 @@
       </figcaption>
     </figure>
 
+    <h2>Occlusion by page overlays (roadmap chunk 3)</h2>
+    <p>
+      The cover heuristic hides a chip only while page UI that
+      <em>actually paints</em> is stacked above the image at the chip's spot;
+      transparent interaction overlays (stretched links, click-capture divs)
+      never hide it. Each fixture below uses <code>ai_declared.png</code> so the
+      badge is always-on and the effect is visible without hovering.
+    </p>
+
+    <figure style="position: relative">
+      <img
+        src="/fixtures/ai_declared.png"
+        alt="AI-declared fixture under a toggleable dropdown"
+        style="width: 320px"
+      />
+      <div
+        id="occlusion-dropdown"
+        hidden
+        style="
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 260px;
+          padding: 10px 12px;
+          background: #fff;
+          border: 1px solid #d0d4da;
+          border-radius: 8px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+          z-index: 10;
+        "
+      >
+        suggestion one<br />suggestion two<br />suggestion three
+      </div>
+      <figcaption>
+        <button
+          onclick="document.getElementById('occlusion-dropdown').hidden ^= 1"
+        >
+          Toggle dropdown
+        </button>
+        <strong>Opaque dropdown</strong> (the Google search-suggestions shape,
+        corpus entry #1) — opening the panel over the image's top-left corner
+        must hide the chip instantly; closing it must fade the chip back in. The
+        panel is a plain z-indexed div, like Google's.
+      </figcaption>
+    </figure>
+
+    <figure style="position: relative">
+      <img
+        src="/fixtures/ai_declared.png"
+        alt="AI-declared fixture under a stretched link"
+        style="width: 320px"
+      />
+      <a
+        href="#stretched-link-target"
+        aria-label="Whole-card stretched link"
+        style="position: absolute; inset: 0; z-index: 10"
+      ></a>
+      <figcaption id="stretched-link-target">
+        <strong>Stretched-link card</strong> — a transparent whole-card
+        <code>&lt;a&gt;</code> hit-tests above the image but paints nothing: the
+        chip must stay visible (this is the pattern every earlier heuristic died
+        on). The badge's own pixels still take the click; the rest of the card
+        follows the link.
+      </figcaption>
+    </figure>
+
+    <figure style="position: relative">
+      <img
+        src="/fixtures/ai_declared.png"
+        alt="AI-declared fixture under a half-transparent scrim"
+        style="width: 320px"
+      />
+      <div
+        style="
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 320px;
+          height: 80px;
+          background: rgba(0, 0, 0, 0.45);
+          z-index: 10;
+        "
+      ></div>
+      <figcaption>
+        <strong>Semi-transparent scrim</strong> (0.45 alpha, under the 0.9
+        threshold) — the image is still visible through it, so the chip must
+        stay visible too.
+      </figcaption>
+    </figure>
+
+    <figure>
+      <button onclick="document.getElementById('occlusion-sticky').hidden ^= 1">
+        Toggle sticky bar
+      </button>
+      <div
+        id="occlusion-sticky"
+        hidden
+        style="
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          background: #1c2026;
+          color: #fff;
+          line-height: 56px;
+          padding: 0 16px;
+          z-index: 100;
+        "
+      >
+        Fixed opaque bar — scroll any badged image under me
+      </div>
+      <figcaption>
+        <strong>Fixed bar</strong> — with the bar on, scrolling any badged image
+        beneath it must hide the chip while the chip's spot is under the bar
+        (the scroll-driven re-probe), and restore it on the way out.
+      </figcaption>
+    </figure>
+
     <h2>Popover checks (task 5.3)</h2>
     <ul>
       <li>
