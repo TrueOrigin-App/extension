@@ -3489,3 +3489,21 @@ hit-test variant.
   alpha parser, never rendered — false positives in context, left
   as-is (extending the owner's test-page fence to test files is an
   owner call).
+
+## 2026-08-15 — Design hooks: unit-test files fenced (owner-directed)
+
+- `src/**/*.test.ts` added to shared `detector.ignoreFiles`
+  (.impeccable/config.json), extending the 2026-08-10 test-page fence to
+  its sibling class: test files never render, so design-hook findings in
+  them are categorically false positives — the chunk-3 trigger was
+  computed-style fixture strings in cover.test.ts (rgb/oklch literals
+  fed to the alpha parser, simulating _host pages'_ styling). Design
+  truth stays enforced at the source files, which remain hooked; tests
+  that pin design values assert against those sources.
+- Deliberately **not** done via per-value ignores (the hook's suggested
+  `ignore-value "rgb(255, 255, 255)" --shared` would whitelist pure
+  white in real surface files too), and scoped to `*.test.ts` only,
+  never all of `src/`. Glob uses `**` per the recorded matcher gotcha
+  (single `*` stops at the first path segment).
+- Owner confirmed in conversation (2026-08-15) after the safety
+  analysis; rides in the chunk-3 PR (#14) whose review notes raised it.
