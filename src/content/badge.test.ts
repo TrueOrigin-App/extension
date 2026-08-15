@@ -1159,3 +1159,104 @@ describe("evidence ring", () => {
     expect(badge.classList.contains("enter")).toBe(false);
   });
 });
+
+describe("cover yield (occlusion by page overlays)", () => {
+  // Paint semantics live in cover.test.ts; what these pin is the wiring —
+  // which chips get probed, when, and what the probe writes. jsdom
+  // computes inline background-color, which is all the opaque fixture
+  // needs (rgb literals here are test fixtures, not palette).
+  function opaquePanel(): HTMLDivElement {
+    const panel = document.createElement("div");
+    panel.style.backgroundColor = "rgb(255, 255, 255)";
+    document.body.append(panel);
+    return panel;
+  }
+
+  it("probes the chip center in the sync pass and yields under paint", () => {
+    const image = makeImage("https://example.com/under-dropdown.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const badge = badgeElements()[0];
+    expect(badge?.dataset["covered"]).toBeUndefined();
+
+    const panel = opaquePanel();
+    hitStacks = () => [panel, image];
+    syncBadges();
+    // RECT.left/top + the 8px anchor offset + half the 28px chip.
+    expect(document.elementsFromPoint).toHaveBeenLastCalledWith(32, 42);
+    expect(badge?.dataset["covered"]).toBe("true");
+
+    // The dropdown closed: the next sync restores the chip.
+    hitStacks = () => [image];
+    syncBadges();
+    expect(badge?.dataset["covered"]).toBeUndefined();
+  });
+
+  it("keeps the chip over a transparent stretched-link overlay", () => {
+    // The recorded misfire class every prior heuristic died on (5.3):
+    // a whole-card <a> hit-tests above the image but paints nothing.
+    const image = makeImage("https://example.com/card.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const link = document.createElement("a");
+    document.body.append(link);
+    hitStacks = () => [link, image];
+    syncBadges();
+    expect(badgeElements()[0]?.dataset["covered"]).toBeUndefined();
+  });
+
+  it("is born yielded when a verdict lands under an already-open layer", () => {
+    const image = makeImage("https://example.com/late-verdict.jpg");
+    const panel = opaquePanel();
+    hitStacks = () => [panel, image];
+    renderBadge(image, wire("ai-declared"), image.src);
+    expect(badgeElements()[0]?.dataset["covered"]).toBe("true");
+  });
+
+  it("reveals an intent-gated badge yielded under an opaque layer", () => {
+    // The sensor senses through overlays by design (Instagram), so the
+    // reveal fires — but the chip must not paint over the panel, so it
+    // arrives covered.
+    const image = makeImage("https://example.com/unknown-under-panel.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("hidden");
+
+    const panel = opaquePanel();
+    movePointer([panel, image], panel);
+    const badge = badgeElements()[0];
+    expect(badge?.dataset["presence"]).toBe("shown");
+    expect(badge?.dataset["covered"]).toBe("true");
+  });
+
+  it("skips probes for presence-hidden chips (cost bound)", () => {
+    const image = makeImage("https://example.com/hidden-unknown.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    expect(badgeElements()[0]?.dataset["presence"]).toBe("hidden");
+
+    const panel = opaquePanel();
+    hitStacks = () => [panel, image];
+    vi.mocked(document.elementsFromPoint).mockClear();
+    syncBadges();
+    expect(document.elementsFromPoint).not.toHaveBeenCalled();
+    expect(badgeElements()[0]?.dataset["covered"]).toBeUndefined();
+  });
+
+  it("shows the checking chip yielded under an opaque layer", () => {
+    const image = makeImage("https://example.com/slow-under-panel.jpg");
+    markPending(image);
+    const panel = opaquePanel();
+    movePointer([panel, image], panel);
+    const chip = overlayRoot?.querySelector<HTMLElement>(".badge.pending");
+    expect(chip).not.toBeNull();
+    expect(chip?.dataset["covered"]).toBe("true");
+  });
+
+  it("pins the covered rules: instant hide, focus and open-panel overrides", () => {
+    const image = makeImage("https://example.com/style-pin.jpg");
+    renderBadge(image, wire("ai-declared"), image.src);
+    const style = overlayRoot?.querySelector("style")?.textContent;
+    expect(style).toContain('.badge[data-covered="true"]');
+    expect(style).toContain('.badge[data-covered="true"]:focus-visible');
+    expect(style).toContain(
+      '.badge[data-covered="true"][aria-expanded="true"]',
+    );
+  });
+});

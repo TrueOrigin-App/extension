@@ -24,22 +24,6 @@ How to work the queue:
 
 ---
 
-## 3. Badge occlusion by page overlays — queued
-
-**Goal:** resolve the remaining z-index-overlay problem (badges paint
-over page UI stacked above images; Google's search-suggestions dropdown
-is corpus entry #1).
-
-- Session opens with the owner ask between the two surviving candidates:
-  a cover heuristic built against real sites, vs. in-DOM sibling
-  injection (construction-correct but carries the recorded DOM-safety
-  risks). The 28px chip already shrank the collision surface; that did
-  not resolve the question.
-- **Context:** DECISIONS.md 2026-08-03 (5.3 deferred finding — why every
-  hit-test heuristic misfires on stretched-link cards), 2026-08-04
-  (Google dropdown report + the three candidates), 2026-08-05 (Phase 3
-  rebuild "docket effects").
-
 ## 4. Popover polish (small PR) — queued
 
 **Goal:** the two surviving 5.3 deferred findings.
@@ -200,5 +184,7 @@ and the review-feedback loop.
    shadow-DOM item retired) — PR #12
 2. Iframe scanning (`all_frames` + `match_origin_as_fallback`,
    tiny-frame early-exit, test-page frame fixtures) — PR #13
+3. Badge occlusion by page overlays (paint-aware cover heuristic;
+   sibling injection rejected at the owner round) — PR #14
 
 (Completed chunks land here as one-liners — `N. Title — PR #N`.)

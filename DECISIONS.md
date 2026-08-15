@@ -3365,3 +3365,127 @@ they live). Free choices made while fixing:
   `test-page/**` (single `*` compiles to `[^/]*` in impeccable's matcher
   and stops at the first subdirectory — verified against its
   `globToRegex` during review).
+
+## 2026-08-15 — Roadmap chunk 3: badge occlusion — paint-aware cover heuristic
+
+The chunk opened with the recorded owner ask between the two surviving
+candidates. **Owner selected the cover heuristic** (over in-DOM sibling
+injection); the deciding refinement is that the heuristic became
+_paint-aware_, which dissolves the objection that killed every earlier
+hit-test variant.
+
+### The decision and why
+
+- **What shipped:** a badge chip hides (`data-covered`) only while an
+  element stacked above its image at the chip's own probe point
+  **actually paints** there. "Paints" (cover.ts) = replaced content
+  (img/video/canvas/iframe/embed/object), a background-image (gradients
+  included), a backdrop-filter, or a background-color whose alpha × the
+  element's own opacity ≥ 0.9 — with `checkVisibility` pruning
+  opacity-zeroed subtrees. Transparent interaction overlays — stretched
+  links, click-capture divs — fail the paint test _by construction_,
+  not by tuning.
+- **Why this resolves the 5.3/2026-08-04 analysis rather than fighting
+  it:** the recorded misfire ("every hit-test heuristic hides badges on
+  stretched-link cards, exactly where badges matter") indicted
+  _presence_ checks — "something above the image". The discriminator
+  was never available position-wise; it is available paint-wise: a
+  stretched link is invisible, Google's dropdown is an opaque box.
+- **Rejected — in-DOM sibling injection** (the construction-correct
+  candidate): occlusion and hit-testing correct by definition, but the
+  failure mode is breaking other people's pages — foreign siblings
+  between framework-managed nodes are the Google-Translate crash class
+  (React insertBefore/removeChild NotFoundError), plus page CSS landing
+  on the badge host, structural selectors (:nth-child, :empty)
+  shifting page layout, and observer self-filtering. A mis-hidden chip
+  is recoverable; a crashed host page is not. Owner concurred
+  (structured ask, this session).
+
+### Mechanics
+
+- **Probe:** one point — the chip's visual center (image top-left + 8px
+  anchor offset + half the 28px chip = +22/+22), `elementsFromPoint`,
+  walk top→bottom (cover.ts `isOpaqueCoverAt`): skip our overlay host
+  (shadow retargeting puts it atop stacks when our own pixels are
+  probed); stop **uncovered** at the image or any ancestor of it
+  (ancestor backgrounds paint beneath the image — and for a
+  pointer-events:none image, absent from every hit stack, the opaque
+  card parent must not read as a cover); first painting element above
+  → covered.
+- **Enforcement sites (three):** the syncBadges read phase — probes ride
+  where layout is already clean, so no extra flush (the chunk-11
+  concern) — for **visually present** chips only; renderBadge's initial
+  placement (a verdict landing under an already-open dropdown is born
+  yielded, no one-frame flash); and the intent-reveal paths
+  (revealIntentBadge / revealPendingChip) — the sensor deliberately
+  senses _through_ overlays (Instagram, 2026-08-06), so a reveal under
+  Google's dropdown fires but arrives covered. Presence-hidden chips
+  are never probed in sync (cost bound: hidden Unknowns dominate
+  image-heavy pages); their covered state refreshes at the moment of
+  reveal, which also un-stales the previous reveal's verdict.
+- **CSS:** `[data-covered="true"]` = opacity 0 + pointer-events none
+  with `transition: none` (the truthful render is "behind that UI" —
+  a fade would linger over the panel); the restore takes the normal
+  fade. Overrides: `:focus-visible` (the AA floor — keyboard focus must
+  stay visible) and `[aria-expanded="true"]` (a covered badge under its
+  own open dialog would strand the panel on an invisible button).
+- **Alpha threshold 0.9 (free choice):** hover dims and scrims sit at
+  0.3–0.6 and must not hide a chip the reader can see the image
+  through; real occluders are solid or near-solid; glass panels at
+  lower fill are caught by their backdrop-filter. Own opacity
+  multiplies in so a fading-in dropdown covers only once it lands.
+  Unparseable color serializations (authored oklch/color()) count as
+  paint — an authored color is a surface, and `transparent` itself
+  always serializes to rgba(0,0,0,0).
+- **Offscreen probes are free:** `elementsFromPoint` answers [] outside
+  the viewport, so no explicit viewport guard exists to get stale.
+
+### Known limits (also in cover.ts, so the next field bug is a lookup)
+
+- A **pointer-events:none overlay** never enters a hit stack: an opaque
+  but pointer-transparent panel is invisible to the probe (mirror of
+  the parked pointer-events:none image limit).
+- **Bare text** paints but is not detected — a positioned text run with
+  no painted box anywhere above the image keeps the chip visible under
+  its glyphs (pre-existing behavior; real occluders carry a container
+  box, Google's dropdown included).
+- **Clip-based occlusion** (image scrolled out of an inner scroller) is
+  out of scope: the probe resolves to the image's own container →
+  ancestor stop. If _other_ content of the scroller paints at the
+  point, the chip does hide — a partial win, not a guarantee.
+- **Ancestor fractional opacity** is not multiplied (only the
+  candidate's own; checkVisibility catches zero) — over-counting
+  toward "covered" under a 0.5-opacity ancestor is the accepted rare
+  direction.
+- A pointer-events:none image sitting on an opaque **non-ancestor
+  sibling backdrop** at the probe point would false-positive covered.
+  Niche of a niche; corpus will tell.
+
+### Verification
+
+- 20 new tests (cover.test.ts predicate semantics; badge.test.ts
+  wiring: sync probe + restore, born-covered render, covered reveal,
+  presence-hidden probe skip, pending-chip yield, stylesheet pin).
+  277/277 pass. The pre-existing "reveals the chip through a page
+  overlay" test passes **untouched** — the transparent-overlay reveal
+  and the opaque-cover yield are the same predicate answering
+  differently, which is the whole design.
+- Live pass (driven browser): all four new test-page fixtures (opaque
+  dropdown hide/restore, stretched-link keep, 0.45-scrim keep, fixed
+  bar + scroll-driven re-probe hide/restore); **google.com corpus
+  entry #1** — suggestions dropdown open over image-results tiles,
+  pointer resting on the list with a buried tile beneath: no chip
+  paints over the dropdown, while a hover outside it still reveals
+  (control); **theverge.com** stretched-link hero card still reveals
+  its Unknown chip. Zero [TrueOrigin] console errors on any of the
+  three.
+- Test-page: new "Occlusion by page overlays" section (dropdown toggle,
+  stretched link, scrim, fixed bar). One build fix recorded for future
+  fixtures: an inline `display: flex` defeats the UA's `[hidden]` rule
+  (same trap as `.evidence[hidden]` in badge.ts) — the fixed bar uses
+  block + line-height instead.
+- Design-hook note: the rgb/oklch literals the impeccable hook flagged
+  in cover.test.ts are computed-style _fixture strings_ fed to the
+  alpha parser, never rendered — false positives in context, left
+  as-is (extending the owner's test-page fence to test files is an
+  owner call).
