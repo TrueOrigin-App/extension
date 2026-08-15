@@ -3643,3 +3643,24 @@ Free choices made while fixing, with alternatives:
   piercing ×3, probe clamp ×2, deferred sweep, stale-cover cleanup);
   typecheck clean. The pre-existing (32, 42) probe pin and the
   0.45-scrim / stretched-link / dropdown fixtures pass untouched.
+
+### Live pass (2026-08-15, driven browser, post-push)
+
+All review-fix behaviors verified on the served test page with injected
+probe overlays (current build confirmed live via an oklab-scrim
+discriminator before testing). Chip stayed visible under: an
+`oklab(0 0 0 / 0.5)` scrim (Chrome computes it unconverted), a
+caption-legibility gradient (opaque bottom, transparent at the chip), a
+`backdrop-filter: saturate(1.05)` layer, and a stretched 1×1 spacer
+shield. Chip hid under: an opaque control panel, two stacked 0.7-alpha
+layers (the compositing path), and a shadow-tree panel behind an
+unstyled host (computed rgba(0,0,0,0) — the piercing path), restoring
+on each removal. A 300ms fade-in covered only after landing and the
+fade-out (element kept in DOM at opacity 0) restored the chip — both
+transitionend re-probe directions. With an opaque fixed bar and the
+image scrolled to rect.top −29.9 (dead center of the old 14px band),
+nothing painted over the bar; scrolling back restored the chip. A
+verdict landing under a pre-installed cover rendered born-yielded, and
+lifting the cover showed the sweep arc drawing on-screen (caught
+mid-draw across consecutive frames) — the deferred-sweep contract.
+Zero `[TrueOrigin]` console output errors on a tracked reload.
