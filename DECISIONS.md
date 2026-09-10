@@ -3664,3 +3664,266 @@ verdict landing under a pre-installed cover rendered born-yielded, and
 lifting the cover showed the sweep arc drawing on-screen (caught
 mid-draw across consecutive frames) — the deferred-sweep contract.
 Zero `[TrueOrigin]` console output errors on a tracked reload.
+
+## 2026-09-10 — Roadmap chunk 4: popover polish (display names, keyboard-reachable evidence)
+
+The two surviving 5.3 deferred findings ("Recorded, not fixed" list,
+2026-08-03) plus the stale labels.ts comment flagged at the roadmap
+round (2026-08-05). Session ran autonomously; the §8 wording point below
+was recorded as an open owner ask for the PR review rather than resolved
+in conversation, and the owner confirmed it there (2026-09-10).
+
+### Presenter display names (providers layer, constraint 4)
+
+- **What:** the presenter registry entry (`src/providers/presenters.ts`)
+  is now `SignalPresenter { name; present }` instead of a bare function,
+  and `providerDisplayName(id)` returns the registered name, falling
+  back to the raw id for providers without a presenter (the same honest
+  degradation as the generic presentation). The C2PA entry names itself
+  **"Content Credentials"** (`C2PA_DISPLAY_NAME` beside
+  `C2PA_PROVIDER_ID` in `present.ts`). The popover's failure line reads
+  `The "Content Credentials" check failed: <message>` — the id "c2pa"
+  no longer reaches the surface; the error text stays the provider's
+  own words (technical, but true — the scope was ids, not messages).
+- **Why here:** the name is provider knowledge, so it lives with the
+  provider's presenter; a new provider ships its name in its registry
+  entry and the popover never changes. Rejected: a `displayName` on
+  `SignalProvider` (an interface-shape change, §8 ask, and the provider
+  object never reaches the content bundle anyway); a name map in
+  labels.ts (the content layer would learn provider ids — the drift
+  constraint 4 forbids).
+- **§8 wording — confirmed by the owner at the PR review
+  (2026-09-10):** two choices touch user-facing text. (1) "Content Credentials" reuses the term the
+  owner-kept disclosure summaries already use for C2PA, so no new
+  vocabulary enters the surface. (2) The failure-line template is kept
+  verbatim as the owner kept it (2026-08-05), quotes included — the
+  quotes read naturally around a proper name, and dropping them is a
+  one-character owner edit if preferred. Either is a wording veto, not
+  a code change.
+
+### Evidence region: a tab stop exactly while it scrolls (popover.ts, badge.ts)
+
+- **The gap:** the evidence region is the panel's primary scroll
+  container (reviewer fix 1's flex column), but its content is static
+  text with no focusable descendants, so focus could never rest inside
+  it — and keyboard scrolling targets the focused element's nearest
+  scroller. With focus on the disclosure button, arrow keys scrolled
+  the panel, which has no overflow of its own once the region absorbed
+  the excess: rows past the region's scroll edge were unreachable
+  without a pointer (WCAG 2.1.1 territory).
+- **What:** the region carries `role="region"` and is named by the
+  disclosure button via `aria-labelledby` (the button gained an id), so
+  a keyboard user lands on "How do we know? region" — the existing
+  string, no second one to maintain. `tabindex="0"` is set **only while
+  the region overflows** (`scrollHeight > clientHeight`): re-read
+  synchronously on expand (the layout the un-hide already needs) and
+  tracked by a ResizeObserver on the region while expanded (the panel's
+  `70vh` cap and `100vw` width make overflow viewport-dependent),
+  disconnected on collapse. A region that currently holds focus keeps
+  its stop even when overflow disappears — dropping focusability under
+  the reader would eject focus to the document (focus fixup). The
+  stylesheet gains `.evidence:focus-visible` with the disclosure's Glass
+  White 2px ring at 2px offset; outlines paint outside the border box
+  and are not clipped by the region's own overflow, and the 4px reach
+  sits inside the panel's 14px padding and the region's 8px/10px
+  margins, so the panel's scroll clip never cuts it (verified live).
+- **Why conditional, not always-focusable:** the common disclosure is
+  the Unknown/no-metadata one — a two-line summary that never scrolls.
+  A permanent stop would land keyboard users on a non-scrolling region
+  wearing a focus ring for no reason on most images; the region is a
+  control only when it has something to scroll. Rejected: relying on
+  Chrome's native keyboard-focusable scrollers (it does land there on
+  Chrome 152, see below, but shipped, reverted, and re-shipped across
+  130–132; the explicit attribute is deterministic, testable, and
+  carries the role and name a native landing lacks); making the panel
+  itself focusable (it already has a focusable child, and the
+  whole-panel fallback scroll is keyboard-reachable through the
+  disclosure — verified 2026-08-05).
+- **Known limit — closed by the PR #15 review fixes (below):** the
+  observer fires only on a box change, so after focus left a region
+  whose overflow vanished while it was focused, the stop lingered until
+  the next size change — and not "once": every later Tab cycle landed
+  on it. A focusout listener now re-runs the check. Still worth
+  knowing: a region whose content sits under the 64px floor
+  (`min-height`, content-box → 74px client) can never overflow through
+  a resize — the floor holds more than its content.
+- **jsdom quirk, recorded for the next test author:** jsdom 27's
+  `:focus` selector stays matched after `blur()` (and after focusing
+  another element) while `activeElement` is correct. The focus guard
+  reads the root's `activeElement` — right for the closed shadow root
+  too, where `document.activeElement` is only the retargeted host —
+  and never `matches(":focus")`.
+
+### labels.ts comment
+
+The privacy-note comment claimed per-image disclosure of the
+remote-manifest fetch "is Phase 3 work"; it now records the 2026-08-05
+decision (dropped per image; the privacy write-up keeps the sentence,
+roadmap chunk 8). `failureLine`'s parameter is `checkName`, documented
+as the presenters-layer display name, so the next reader doesn't pass
+an id.
+
+### Verification
+
+- 297/297 tests pass (8 new: display-name lookup ×3 including the
+  Object.prototype-key pin; raw-id failure line; region naming +
+  conditional stop; ResizeObserver tracking via a stubbed observer;
+  focused-region guard; `.evidence:focus-visible` stylesheet pin); the
+  existing failure-line pin updated to the display name. Typecheck,
+  Prettier, build clean (content bundle 76.8 kB).
+- Live (Chrome 152, standalone probe page bundling the real
+  `buildPopoverContent` under the real `BADGE_STYLE`, closed shadow
+  root, port 8919 — no extension reload): both failure lines rendered
+  as designed (`"Content Credentials"` for c2pa, raw id for an
+  unregistered provider). Rich panel (480px of evidence in a 79px
+  region): Tab from the disclosure landed on the region with the ring
+  visible and un-clipped, End scrolled it to 401/401 with page scrollY
+  unchanged; Tab then reached the next panel's disclosure. Short
+  Unknown panel (74/74): no stop — Tab skipped the region. Observer
+  path: adding content until the panel hit its cap set the stop with no
+  click; shrinking the window to a 237px viewport (region at its 74px
+  floor) set it; growing back with the region focused kept it; growing
+  back unfocused (126→102 box change, overflow gone) removed it.
+  Removing the tabindex by hand still landed Tab on the region — Chrome
+  152's native focusable scrollers — which is why the attribute, not
+  the landing, is what the tests and this record assert. Zero console
+  errors.
+
+## 2026-09-10 — PR #15 review fixes: focus lifecycle, registry linkage, honest records
+
+The xhigh review of PR #15 returned 14 findings (9 confirmed, 3
+plausible, 2 from the gap sweep); all were applied in one wave on the
+chunk-4 branch. The correctness theme: the evidence region's focus
+lifecycle had two paths with no teardown — focus leaving the region
+(the stop lingered on every later Tab cycle, not "once" as the chunk-4
+entry claimed) and the panel being removed (the ResizeObserver kept
+watching a detached node). Free choices made while fixing, with
+alternatives:
+
+### Evidence region focus lifecycle (popover.ts, focus.ts, badge.ts)
+
+- **focusout re-runs the overflow check.** The stop now leaves with the
+  reader: both Blink and jsdom clear the active element before
+  dispatching focusout, so the existing focused-region guard works
+  unchanged. Rejected: a blur listener (does not bubble; equivalent
+  today since the region has no focusable descendants, but focusout is
+  the form that stays right if it ever gains one).
+- **Teardown by `isConnected`, at the top of `update()`.** badge.ts
+  removes the panel on three paths (light dismiss, verdict rebuild,
+  removeAllBadges) with no hook into popover.ts; the observer's next
+  delivery is a 0×0 box for the detached region, and the check there
+  disconnects it. Rejected: a returned dispose() wired into closePopover
+  (a new cross-module contract for a resource Chromium already holds
+  weakly — the harm was untidiness, not a leak); a MutationObserver on
+  removal (heavier than the delivery that already arrives).
+- **`activeElementIn(node)` in a sibling `focus.ts`.** popover.ts and
+  badge.ts computed "the active element inside the closed shadow root"
+  two ways; one helper reads the node's root (a Document or a
+  ShadowRoot, by `instanceof`) and returns null for a detached tree.
+  badge.ts's `?? document.activeElement` fallback could never satisfy
+  `element.contains` anyway. Rejected: exporting it from popover.ts
+  (badge.ts imports popover.ts already, but a focus primitive is not
+  popover content).
+- **Toggle simplified.** The click handler derives `open` from the
+  pre-toggle state once and drives a single `setOpen(open)` switch; the
+  tracker no longer takes the disclosure — its two static ARIA lines
+  moved beside `aria-controls`, where the comment already explained
+  them.
+- **ResizeObserver unguarded, shimmed in tests.** The
+  `typeof ResizeObserver === "function"` branch was a jsdom
+  accommodation shipped in the content bundle (index.ts constructs one
+  unguarded at module scope already). A root `vitest.setup.ts`
+  (`setupFiles`) installs an inert `ResizeObserver` for every test
+  file; per-test `vi.stubGlobal` overrides still work because
+  `unstubAllGlobals` restores the shim. The file rides in tsconfig's
+  `include` so it typechecks. Rejected: a `src/test-setup.ts` (test
+  infrastructure inside the bundled tree; root keeps it beside
+  vitest.config.ts).
+- **Focus ring in the whole-panel fallback.** The chunk-4 claim that
+  "the panel's scroll clip never cuts it" held only in the region-scroll
+  layout: when the panel itself scrolls, a focus scroll can align the
+  region's border box flush with the scrollport edge and clip one edge
+  of the 4px ring (cosmetic — three edges remain). `.evidence` gains
+  `scroll-margin: 4px`, honored by focus scrolling; the geometry note
+  now names the actual neighbours (the region's 8px top margin and the
+  privacy line's 10px top margin — the region's own 10px is
+  padding-top, inside the border box). The `.evidence:focus-visible`
+  declarations were a copy of `.disclosure:focus-visible`; they are one
+  grouped rule now, so the next AA tweak cannot drift.
+
+### Presenter registry (providers layer)
+
+- **`present` as a property, not a method.** Method-shorthand
+  parameters are bivariant even under strictFunctionTypes (verified
+  with the repo's tsc): a presenter typed for a narrower signal
+  compiled against the interface but had errored against the pre-PR
+  bare function type. Property syntax restores contravariance.
+- **Registry linkage test.** `hasPresenter(id)` is exported for one
+  test in presenters.test.ts that walks `activeProviders` and asserts
+  each has an entry and a display name distinct from its wire id — so
+  a provider registered in index.ts without a presenter (chunk 5 is the
+  next candidate) fails CI instead of shipping raw-id failure lines.
+  Rejected: a type-level linkage (the registry is a runtime Map keyed
+  by string ids; a mapped type over a provider-id union would have to
+  live outside the providers layer or duplicate the ids).
+- **Blank names fall back to the id.** `providerDisplayName` uses `||`
+  so a registered entry with `name: ""` degrades to the documented
+  raw-id fallback instead of `The "" check failed`; the linkage test
+  catches it for active providers (the fallback equals the id).
+  Rejected: a registration-time throw (a content-script module failing
+  to load over a blank constant is a worse failure than an unpolished
+  line, and the test already catches the shipped registry).
+
+### Records
+
+- DESIGN.md and the popover/labels comments said failure lines name the
+  check "never [by] its wire id"; the shipped, tested fallback prints
+  the raw id for a provider with no presenter. All three now state the
+  fallback. The review also asked for a pending-owner marker on
+  "Content Credentials" in DESIGN.md so silence would not read as
+  approval; the owner confirmed the wording in the same review round
+  (2026-09-10), so DESIGN.md and present.ts record the confirmation
+  instead.
+- labels.ts said the remote-manifest fetch is disclosed "in the privacy
+  write-up (roadmap chunk 8)", which does not exist yet (chunk 8 is
+  queued); it now says the write-up will carry it.
+- Tests pinned weaker invariants than their names: the AA-floor pin now
+  matches the outline declaration, not just the selector; "lists each
+  failure" renders two failures (c2pa + unregistered) and asserts both;
+  the observer test asserts no observe before expand and a re-observe
+  after collapse→expand; the focused-region test drops the stop on blur
+  alone; a new test covers observer teardown on panel removal. All
+  popover.test.ts renders now go into the document, as the real panel
+  does, since a detached region reads as torn down.
+
+### Verification
+
+- 299/299 tests pass (2 new: the registry linkage walk over
+  `activeProviders`; observer teardown on panel removal — plus the
+  hardened pins above). Typecheck, Prettier, build clean (content
+  bundle 77.3 kB, +0.5 kB for focus.ts and the focusout wiring).
+- The bivariance regression was reproduced and its fix confirmed with
+  the repo's tsc: a scratch presenter whose `present` took a
+  `SignalResult` intersected with a narrower `detail` type compiled
+  against the method-shorthand interface and fails against the
+  property form (TS2322, parameter `SignalResult` not assignable to the
+  narrower type).
+- Live (Chrome 152, standalone probe page bundling the shipped
+  `buildPopoverContent` under the shipped `BADGE_STYLE`, closed shadow
+  root, port 8919 — no extension reload; `ResizeObserver` wrapped on
+  the page to count observe/disconnect). Both failure lines rendered
+  as designed. **focusout:** rich panel expanded (region 79px showing
+  1436px, stop set), real Tab landed on the region with the ring;
+  content pruned to one failure line while focused (region at its 74px
+  floor, no overflow) kept the stop; Shift+Tab to the disclosure
+  removed it with no resize, and the next Tab skipped the region for
+  the neighbouring panel's disclosure — the lingering-stop path is
+  gone. **Teardown:** expanding the second panel observed (2 observes),
+  removing it disconnected on the next frame (1 disconnect). **Fallback
+  ring:** window at 237px inner height (cap 166px; panel scrolling
+  336px, region at its floor 112px below the clip edge), Tab onto the
+  region focus-scrolled it to 3.9px above the clip with the ring's
+  bottom edge intact; positive control with `scroll-margin: 0` landed
+  it flush (-0.1px) and the zoomed capture shows the bottom edge of
+  the ring cut — the finding, reproduced and closed. Zero console
+  errors.

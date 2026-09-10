@@ -16,6 +16,7 @@
 
 import type { WireVerdict } from "../messaging/protocol";
 import { flattenShadowStack, isOpaqueCoverAt, opacityVisible } from "./cover";
+import { activeElementIn } from "./focus";
 import { buildPopoverContent } from "./popover";
 import { CHECKING_LABEL, POPOVER_STRINGS, VERDICT_LABELS } from "./labels";
 import { buildRing, ringStateForChecking, ringStateForVerdict } from "./ring";
@@ -423,7 +424,17 @@ const BADGE_STYLE = `
   .disclosure[aria-expanded="true"]::before {
     transform: translate(0, -1.75px) rotate(45deg);
   }
-  .disclosure:focus-visible {
+  /* The evidence region takes a tab stop while it overflows (popover.ts)
+     and wears this same ring: Glass White at 2px clears the AA floor
+     against the panel. Outlines paint outside the border box and are not
+     clipped by the region's own overflow; the 4px reach sits inside the
+     panel's 14px padding, the region's 8px top margin, and the privacy
+     line's 10px top margin. In the whole-panel fallback (the panel itself
+     scrolls) a focus scroll can align the region flush with the
+     scrollport edge, where the panel's clip would cut one edge of the
+     ring — the region's scroll-margin keeps those 4px clear. */
+  .disclosure:focus-visible,
+  .evidence:focus-visible {
     outline: 2px solid #f5f6f7;
     outline-offset: 2px;
   }
@@ -466,6 +477,9 @@ const BADGE_STYLE = `
     margin-top: 8px;
     padding-top: 10px;
     border-top: 1px solid rgba(245, 246, 247, 0.16);
+    /* Room for the focus ring's reach under a focus scroll — see the
+       :focus-visible rule above. */
+    scroll-margin: 4px;
   }
   /* display: grid above would defeat the UA's [hidden] rule — without
      this, the disclosure could never visually collapse. */
@@ -794,10 +808,8 @@ function closePopover(refocusBadge = false): void {
   const { image, element, dismiss } = openPopover;
   // If keyboard focus is inside the departing panel, removal would drop it
   // to <body> and the next Tab would restart from the top of the page —
-  // hand it back to the badge instead, on every close path. (In Chrome the
-  // document-level activeElement is the retargeted host; the shadow root
-  // holds the real one.)
-  const active = shadowRoot?.activeElement ?? document.activeElement;
+  // hand it back to the badge instead, on every close path.
+  const active = activeElementIn(element);
   const hadFocus = active !== null && element.contains(active);
   openPopover = null;
   dismiss.abort();

@@ -373,6 +373,15 @@ scale from 0.98). Fixed content order, top to bottom:
    `rgba(245, 246, 247, 0.38)` — clears 3:1 against the panel's
    worst-case backdrop) so truncation is never invisible; separated
    by a Track Frost hairline; per-signal rows and failure lines inside.
+   A `role="region"` named by the disclosure ("How do we know?") that
+   takes a tab stop only while it overflows — keyboard users reach every
+   row, and never land on a region with nothing to scroll — wearing the
+   disclosure's Glass White 2px focus ring (`outline-offset: 2px`) when
+   focused from the keyboard. Failure lines name the check by its
+   presenter's display name — "Content Credentials" for C2PA
+   (owner-confirmed wording, 2026-09-10); a provider with no presenter
+   entry is named by its raw id, honest but unpolished, and the
+   registry entry is the fix.
    When the whole panel scrolls instead (the short-viewport fallback),
    its scrollbar track is inset by the 14px corner radius so the thumb
    travels only the straight edge — it never rides the corner arcs.

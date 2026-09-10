@@ -1,11 +1,15 @@
 // Pins the presenter registry contract (task 5.3): each provider's signal
 // is explained by its own presenter, and providers without one fall back to
 // the generic presentation — so adding a provider never requires popover
-// changes (plan.md §8, constraint 4).
+// changes (plan.md §8, constraint 4) — plus the registry linkage: every
+// provider the extension actually runs ships a presenter with a
+// reader-facing name, so the fallbacks stay a safety net, never the
+// shipped surface.
 import { describe, expect, it } from "vitest";
 import type { SignalResult } from "../core/types";
 import type { C2paDetail } from "./c2pa/mapping";
-import { presentSignal } from "./presenters";
+import { activeProviders } from "./index";
+import { hasPresenter, presentSignal, providerDisplayName } from "./presenters";
 
 function c2pa(detail: Partial<C2paDetail> & { reason: C2paDetail["reason"] }) {
   return presentSignal({
@@ -121,5 +125,38 @@ describe("generic fallback", () => {
     );
     expect(fact(presentation, "Finding")).toBe("ai-indicated");
     expect(fact(presentation, "Confidence")).toBe("62%");
+  });
+});
+
+describe("providerDisplayName", () => {
+  it("names a registered provider's check in plain language", () => {
+    expect(providerDisplayName("c2pa")).toBe("Content Credentials");
+  });
+
+  it("has a presenter with a reader-facing name for every active provider", () => {
+    // A provider registered in src/providers/index.ts without an entry
+    // here would ship raw-id failure lines and generic evidence rows with
+    // the suite green; a blank name would fall back to the id the same
+    // way. The wire id is code and never reaches the surface.
+    expect(activeProviders.length).toBeGreaterThan(0);
+    for (const provider of activeProviders) {
+      expect(
+        hasPresenter(provider.id),
+        `no presenter for "${provider.id}"`,
+      ).toBe(true);
+      expect(
+        providerDisplayName(provider.id),
+        `"${provider.id}" is named by its wire id`,
+      ).not.toBe(provider.id);
+    }
+  });
+
+  it("falls back to the raw id for providers without a presenter", () => {
+    expect(providerDisplayName("future-watermark")).toBe("future-watermark");
+  });
+
+  it("does not resolve Object.prototype keys as names (Map registry)", () => {
+    expect(providerDisplayName("constructor")).toBe("constructor");
+    expect(providerDisplayName("toString")).toBe("toString");
   });
 });

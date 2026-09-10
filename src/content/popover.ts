@@ -10,7 +10,8 @@
 
 import { verdictClassForSignal } from "../core/verdict";
 import type { WireVerdict } from "../messaging/protocol";
-import { presentSignal } from "../providers/presenters";
+import { presentSignal, providerDisplayName } from "../providers/presenters";
+import { activeElementIn } from "./focus";
 import {
   POPOVER_STRINGS,
   VERDICT_EXPLANATIONS,
@@ -19,6 +20,63 @@ import {
 import { buildRing, ringStateForVerdict } from "./ring";
 
 let nextEvidenceId = 0;
+
+/** Keeps the evidence region keyboard-reachable exactly when it scrolls.
+ *
+ * The region is the panel's primary scroll container (badge.ts flex
+ * column), but its content is static text with no focusable descendants,
+ * so nothing inside it can ever hold focus — and keyboard scrolling
+ * targets the focused element's nearest scroller. With focus resting on
+ * the disclosure button, outside the region, arrow keys scroll the panel,
+ * which has no overflow of its own once the region absorbed the excess:
+ * rows past the region's scroll edge were unreachable without a pointer
+ * (5.3 deferred finding). A tab stop is the fix, but only while there is
+ * something to scroll — an always-present stop would land keyboard
+ * users on a non-scrolling region (a focus ring with no purpose) on the
+ * common short Unknown disclosure. Overflow is re-read on expand (the
+ * synchronous read is the layout the un-hide already needs), and tracked
+ * by a ResizeObserver while expanded, since the panel's viewport-relative
+ * height cap (70vh) can change the answer under a window resize. A
+ * region that currently holds focus keeps its stop even when overflow
+ * disappears: dropping focusability under the reader's focus would eject
+ * focus to the document. The stop leaves with the reader instead —
+ * focusout re-runs the check.
+ *
+ * Returns the open/closed switch the disclosure drives. */
+function trackScrollFocusability(
+  evidence: HTMLDivElement,
+): (open: boolean) => void {
+  const update = (): void => {
+    if (!evidence.isConnected) {
+      // Teardown. badge.ts removes the panel (light dismiss, verdict
+      // rebuild, removeAllBadges) with no hook into this module; the
+      // observer's next delivery — a 0×0 box for the detached region — is
+      // the signal to let go.
+      observer.disconnect();
+      return;
+    }
+    if (evidence.scrollHeight > evidence.clientHeight) {
+      evidence.tabIndex = 0;
+      return;
+    }
+    if (activeElementIn(evidence) !== evidence) {
+      evidence.removeAttribute("tabindex");
+    }
+  };
+  const observer = new ResizeObserver(update);
+  // Both Blink and jsdom clear the active element before dispatching
+  // focusout, so the focus guard above sees the region as unfocused here.
+  evidence.addEventListener("focusout", update);
+  return (open) => {
+    if (open) {
+      update();
+      observer.observe(evidence);
+    } else {
+      observer.disconnect();
+      evidence.removeAttribute("tabindex");
+    }
+  };
+}
 
 function paragraph(className: string, text: string): HTMLParagraphElement {
   const element = document.createElement("p");
@@ -101,11 +159,18 @@ export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   for (const signal of verdict.signals) {
     evidence.append(signalSection(signal));
   }
+  // Failures name their check by the presenters-layer display name
+  // ("Content Credentials", not "c2pa"); only a provider with no presenter
+  // entry is named by its raw id, and the registry entry is the fix. The
+  // error text stays as the provider reported it — technical, but true.
   for (const failure of verdict.failures) {
     evidence.append(
       paragraph(
         "failure",
-        POPOVER_STRINGS.failureLine(failure.providerId, failure.message),
+        POPOVER_STRINGS.failureLine(
+          providerDisplayName(failure.providerId),
+          failure.message,
+        ),
       ),
     );
   }
@@ -113,13 +178,21 @@ export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   const disclosure = document.createElement("button");
   disclosure.type = "button";
   disclosure.className = "disclosure";
+  // The id lets the evidence region borrow the button's text as its
+  // accessible name (aria-labelledby): "How do we know?" names the region
+  // a keyboard user lands in, with no second string to maintain.
+  disclosure.id = `${evidence.id}-disclosure`;
   disclosure.textContent = POPOVER_STRINGS.disclosureLabel;
   disclosure.setAttribute("aria-expanded", "false");
   disclosure.setAttribute("aria-controls", evidence.id);
+  evidence.setAttribute("role", "region");
+  evidence.setAttribute("aria-labelledby", disclosure.id);
+  const setOpen = trackScrollFocusability(evidence);
   disclosure.addEventListener("click", () => {
-    const expanded = disclosure.getAttribute("aria-expanded") === "true";
-    disclosure.setAttribute("aria-expanded", String(!expanded));
-    evidence.hidden = expanded;
+    const open = disclosure.getAttribute("aria-expanded") !== "true";
+    disclosure.setAttribute("aria-expanded", String(open));
+    evidence.hidden = !open;
+    setOpen(open);
   });
 
   fragment.append(
