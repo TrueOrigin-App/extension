@@ -472,6 +472,16 @@ const BADGE_STYLE = `
   .evidence[hidden] {
     display: none;
   }
+  /* The region takes a tab stop while it overflows (popover.ts), so it
+     needs the disclosure's ring: Glass White at 2px clears the AA floor
+     against the panel. Outlines paint outside the border box and are
+     not clipped by the region's own overflow; the 4px reach stays inside
+     the panel's 14px padding and the region's 8px/10px margins, so the
+     panel's scroll clip never cuts it either. */
+  .evidence:focus-visible {
+    outline: 2px solid #f5f6f7;
+    outline-offset: 2px;
+  }
   .summary {
     margin: 0;
     color: #c9ced6;

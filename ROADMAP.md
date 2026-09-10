@@ -24,24 +24,6 @@ How to work the queue:
 
 ---
 
-## 4. Popover polish (small PR) — queued
-
-**Goal:** the two surviving 5.3 deferred findings.
-
-- Presenter display-name registry: failure lines still print raw
-  provider ids (`labels.ts` `failureLine`); add a display-name field in
-  the presenters layer (the constraint-4-clean fix).
-- Keyboard-accessible scrolling of an overflowing evidence list: the
-  overlay has no focusable scroll region today; fix must keep the AA
-  floor (visible focus indicator).
-- Also: delete the stale labels.ts comment claiming per-image
-  disclosure of the remote-manifest fetch "is Phase 3 work" — that
-  disclosure was dropped 2026-08-05 (roadmap round).
-- New user-facing strings are §8 wording territory — owner ask.
-- **Context:** DECISIONS.md 2026-08-03 (5.3 polish, "Recorded, not
-  fixed" list), 2026-08-05 (wording pass — labels are finalized;
-  edits are an owner ask; roadmap round — the disclosure drop).
-
 ## 5. Generator-metadata provider, part 1 (PNG) — queued
 
 **Goal:** the owner-approved second local provider, scoped to PNG text
@@ -186,5 +168,8 @@ and the review-feedback loop.
    tiny-frame early-exit, test-page frame fixtures) — PR #13
 3. Badge occlusion by page overlays (paint-aware cover heuristic;
    sibling injection rejected at the owner round) — PR #14
+4. Popover polish (presenter display names in failure lines; evidence
+   region keyboard-reachable while it overflows; stale labels.ts
+   comment retired) — PR #15
 
 (Completed chunks land here as one-liners — `N. Title — PR #N`.)

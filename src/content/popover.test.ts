@@ -2,10 +2,12 @@
 //
 // Pins the popover's content contract: headline + explanation for every
 // verdict, the collapsed-by-default disclosure, per-signal evidence via the
-// providers-layer presenters, honest degraded-check and failure lines, and
-// the generic fallback that keeps the popover provider-agnostic (plan.md
-// §8, constraint 4).
-import { describe, expect, it } from "vitest";
+// providers-layer presenters, honest degraded-check and failure lines
+// (naming checks by their presenters-layer display name), the generic
+// fallback that keeps the popover provider-agnostic (plan.md §8,
+// constraint 4), and the evidence region's keyboard reachability — a tab
+// stop exactly while it overflows (roadmap chunk 4).
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalResult, VerdictId } from "../core/types";
 import type { WireVerdict } from "../messaging/protocol";
 import { buildPopoverContent } from "./popover";
@@ -28,6 +30,48 @@ function make(
 ): WireVerdict {
   return { verdict, basis: signals, signals, failures };
 }
+
+/** jsdom has no layout: overflow is whatever the test says it is. */
+function setScrollMetrics(
+  element: HTMLElement,
+  metrics: { scrollHeight: number; clientHeight: number },
+): void {
+  for (const [name, value] of Object.entries(metrics)) {
+    Object.defineProperty(element, name, { value, configurable: true });
+  }
+}
+
+const OVERFLOWING = { scrollHeight: 400, clientHeight: 160 };
+const FITTING = { scrollHeight: 120, clientHeight: 160 };
+
+/** A ResizeObserver stand-in that hands the test its callback, so the
+ * live-resize follow-up path can be driven by hand. */
+function stubResizeObserver(): {
+  callbacks: Array<() => void>;
+  observe: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+} {
+  const callbacks: Array<() => void> = [];
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe = observe;
+      disconnect = disconnect;
+      unobserve = vi.fn();
+    },
+  );
+  return { callbacks, observe, disconnect };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.body.replaceChildren();
+});
 
 function factValue(container: HTMLElement, label: string): string | undefined {
   const terms = Array.from(container.querySelectorAll(".facts dt"));
@@ -118,8 +162,23 @@ describe("buildPopoverContent", () => {
     expect(container.querySelector(".notice")?.textContent).toContain(
       "incomplete",
     );
+    // The check is named by its presenters-layer display name, not the
+    // wire id; the message stays the provider's own words.
     expect(container.querySelector(".failure")?.textContent).toBe(
-      'The "c2pa" check failed: trust fetch 503',
+      'The "Content Credentials" check failed: trust fetch 503',
+    );
+  });
+
+  it("names failures from providers without a presenter by their raw id", () => {
+    const container = render(
+      make(
+        "unknown",
+        [],
+        [{ providerId: "future-watermark", message: "timeout" }],
+      ),
+    );
+    expect(container.querySelector(".failure")?.textContent).toBe(
+      'The "future-watermark" check failed: timeout',
     );
   });
 
@@ -172,5 +231,86 @@ describe("buildPopoverContent", () => {
     expect(
       container.querySelector(".signal .ring")?.getAttribute("data-ring"),
     ).toBe("unknown");
+  });
+
+  describe("evidence region keyboard reachability", () => {
+    it("names the region by the disclosure and takes a tab stop only while it overflows", () => {
+      const container = render(make("unknown"));
+      const disclosure =
+        container.querySelector<HTMLButtonElement>(".disclosure")!;
+      const evidence = container.querySelector<HTMLDivElement>(".evidence")!;
+
+      // A landmark a keyboard user can identify, named by the button that
+      // revealed it — no second string.
+      expect(evidence.getAttribute("role")).toBe("region");
+      expect(disclosure.id).not.toBe("");
+      expect(evidence.getAttribute("aria-labelledby")).toBe(disclosure.id);
+      expect(evidence.hasAttribute("tabindex")).toBe(false);
+
+      setScrollMetrics(evidence, OVERFLOWING);
+      disclosure.click();
+      expect(evidence.getAttribute("tabindex")).toBe("0");
+
+      // Collapsing clears the stop; the next expand re-reads overflow.
+      disclosure.click();
+      expect(evidence.hasAttribute("tabindex")).toBe(false);
+
+      setScrollMetrics(evidence, FITTING);
+      disclosure.click();
+      expect(evidence.hasAttribute("tabindex")).toBe(false);
+    });
+
+    it("tracks overflow changes while expanded through a ResizeObserver", () => {
+      const observer = stubResizeObserver();
+      const container = render(make("unknown"));
+      const disclosure =
+        container.querySelector<HTMLButtonElement>(".disclosure")!;
+      const evidence = container.querySelector<HTMLDivElement>(".evidence")!;
+      expect(observer.callbacks).toHaveLength(1);
+      const resized = observer.callbacks[0]!;
+
+      setScrollMetrics(evidence, FITTING);
+      disclosure.click();
+      expect(observer.observe).toHaveBeenCalledWith(evidence);
+      expect(evidence.hasAttribute("tabindex")).toBe(false);
+
+      // The viewport shrinks (70vh cap) and the region starts scrolling.
+      setScrollMetrics(evidence, OVERFLOWING);
+      resized();
+      expect(evidence.getAttribute("tabindex")).toBe("0");
+
+      setScrollMetrics(evidence, FITTING);
+      resized();
+      expect(evidence.hasAttribute("tabindex")).toBe(false);
+
+      disclosure.click();
+      expect(observer.disconnect).toHaveBeenCalled();
+    });
+
+    it("keeps a focused region focusable when its overflow disappears", () => {
+      const observer = stubResizeObserver();
+      const container = render(make("unknown"));
+      document.body.append(container);
+      const disclosure =
+        container.querySelector<HTMLButtonElement>(".disclosure")!;
+      const evidence = container.querySelector<HTMLDivElement>(".evidence")!;
+      const resized = observer.callbacks[0]!;
+
+      setScrollMetrics(evidence, OVERFLOWING);
+      disclosure.click();
+      evidence.focus();
+      expect(document.activeElement).toBe(evidence);
+
+      // Dropping the tabindex here would eject focus to the document.
+      setScrollMetrics(evidence, FITTING);
+      resized();
+      expect(evidence.getAttribute("tabindex")).toBe("0");
+      expect(document.activeElement).toBe(evidence);
+
+      // Once focus has moved on, the stop goes with the overflow.
+      evidence.blur();
+      resized();
+      expect(evidence.hasAttribute("tabindex")).toBe(false);
+    });
   });
 });

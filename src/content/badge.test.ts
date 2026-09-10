@@ -227,6 +227,16 @@ describe("popover", () => {
     expect(style).toContain(".evidence[hidden]");
   });
 
+  it("styles keyboard focus on the evidence region (its tab stop while scrolling)", () => {
+    // The region is a tab stop only while it overflows (popover.ts), and
+    // a tab stop without a visible focus indicator fails the AA floor.
+    // jsdom doesn't cascade shadow stylesheets, so pin the stylesheet text.
+    const image = makeImage("https://example.com/a.jpg");
+    renderBadge(image, wire("unknown"), image.src);
+    const style = overlayRoot?.querySelector("style")?.textContent;
+    expect(style).toContain(".evidence:focus-visible");
+  });
+
   it("pins the explicit direction reset (all:initial excludes direction)", () => {
     // Regression pin: the CSS "all" property excludes direction and
     // unicode-bidi by spec, so without an explicit reset an RTL host page

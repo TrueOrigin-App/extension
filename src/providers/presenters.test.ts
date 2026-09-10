@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { SignalResult } from "../core/types";
 import type { C2paDetail } from "./c2pa/mapping";
-import { presentSignal } from "./presenters";
+import { presentSignal, providerDisplayName } from "./presenters";
 
 function c2pa(detail: Partial<C2paDetail> & { reason: C2paDetail["reason"] }) {
   return presentSignal({
@@ -121,5 +121,20 @@ describe("generic fallback", () => {
     );
     expect(fact(presentation, "Finding")).toBe("ai-indicated");
     expect(fact(presentation, "Confidence")).toBe("62%");
+  });
+});
+
+describe("providerDisplayName", () => {
+  it("names a registered provider's check in plain language", () => {
+    expect(providerDisplayName("c2pa")).toBe("Content Credentials");
+  });
+
+  it("falls back to the raw id for providers without a presenter", () => {
+    expect(providerDisplayName("future-watermark")).toBe("future-watermark");
+  });
+
+  it("does not resolve Object.prototype keys as names (Map registry)", () => {
+    expect(providerDisplayName("constructor")).toBe("constructor");
+    expect(providerDisplayName("toString")).toBe("toString");
   });
 });

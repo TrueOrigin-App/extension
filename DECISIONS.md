@@ -3664,3 +3664,126 @@ verdict landing under a pre-installed cover rendered born-yielded, and
 lifting the cover showed the sweep arc drawing on-screen (caught
 mid-draw across consecutive frames) — the deferred-sweep contract.
 Zero `[TrueOrigin]` console output errors on a tracked reload.
+
+## 2026-09-10 — Roadmap chunk 4: popover polish (display names, keyboard-reachable evidence)
+
+The two surviving 5.3 deferred findings ("Recorded, not fixed" list,
+2026-08-03) plus the stale labels.ts comment flagged at the roadmap
+round (2026-08-05). Session ran autonomously; the §8 wording point below
+is recorded as an open owner ask for the PR review rather than resolved
+in conversation.
+
+### Presenter display names (providers layer, constraint 4)
+
+- **What:** the presenter registry entry (`src/providers/presenters.ts`)
+  is now `SignalPresenter { name; present }` instead of a bare function,
+  and `providerDisplayName(id)` returns the registered name, falling
+  back to the raw id for providers without a presenter (the same honest
+  degradation as the generic presentation). The C2PA entry names itself
+  **"Content Credentials"** (`C2PA_DISPLAY_NAME` beside
+  `C2PA_PROVIDER_ID` in `present.ts`). The popover's failure line reads
+  `The "Content Credentials" check failed: <message>` — the id "c2pa"
+  no longer reaches the surface; the error text stays the provider's
+  own words (technical, but true — the scope was ids, not messages).
+- **Why here:** the name is provider knowledge, so it lives with the
+  provider's presenter; a new provider ships its name in its registry
+  entry and the popover never changes. Rejected: a `displayName` on
+  `SignalProvider` (an interface-shape change, §8 ask, and the provider
+  object never reaches the content bundle anyway); a name map in
+  labels.ts (the content layer would learn provider ids — the drift
+  constraint 4 forbids).
+- **§8 wording — open owner ask (PR review):** two choices touch
+  user-facing text. (1) "Content Credentials" reuses the term the
+  owner-kept disclosure summaries already use for C2PA, so no new
+  vocabulary enters the surface. (2) The failure-line template is kept
+  verbatim as the owner kept it (2026-08-05), quotes included — the
+  quotes read naturally around a proper name, and dropping them is a
+  one-character owner edit if preferred. Either is a wording veto, not
+  a code change.
+
+### Evidence region: a tab stop exactly while it scrolls (popover.ts, badge.ts)
+
+- **The gap:** the evidence region is the panel's primary scroll
+  container (reviewer fix 1's flex column), but its content is static
+  text with no focusable descendants, so focus could never rest inside
+  it — and keyboard scrolling targets the focused element's nearest
+  scroller. With focus on the disclosure button, arrow keys scrolled
+  the panel, which has no overflow of its own once the region absorbed
+  the excess: rows past the region's scroll edge were unreachable
+  without a pointer (WCAG 2.1.1 territory).
+- **What:** the region carries `role="region"` and is named by the
+  disclosure button via `aria-labelledby` (the button gained an id), so
+  a keyboard user lands on "How do we know? region" — the existing
+  string, no second one to maintain. `tabindex="0"` is set **only while
+  the region overflows** (`scrollHeight > clientHeight`): re-read
+  synchronously on expand (the layout the un-hide already needs) and
+  tracked by a ResizeObserver on the region while expanded (the panel's
+  `70vh` cap and `100vw` width make overflow viewport-dependent),
+  disconnected on collapse. A region that currently holds focus keeps
+  its stop even when overflow disappears — dropping focusability under
+  the reader would eject focus to the document (focus fixup). The
+  stylesheet gains `.evidence:focus-visible` with the disclosure's Glass
+  White 2px ring at 2px offset; outlines paint outside the border box
+  and are not clipped by the region's own overflow, and the 4px reach
+  sits inside the panel's 14px padding and the region's 8px/10px
+  margins, so the panel's scroll clip never cuts it (verified live).
+- **Why conditional, not always-focusable:** the common disclosure is
+  the Unknown/no-metadata one — a two-line summary that never scrolls.
+  A permanent stop would land keyboard users on a non-scrolling region
+  wearing a focus ring for no reason on most images; the region is a
+  control only when it has something to scroll. Rejected: relying on
+  Chrome's native keyboard-focusable scrollers (it does land there on
+  Chrome 152, see below, but shipped, reverted, and re-shipped across
+  130–132; the explicit attribute is deterministic, testable, and
+  carries the role and name a native landing lacks); making the panel
+  itself focusable (it already has a focusable child, and the
+  whole-panel fallback scroll is keyboard-reachable through the
+  disclosure — verified 2026-08-05).
+- **Known limit (accepted):** the observer fires only on a box change.
+  After focus leaves a region whose overflow vanished while it was
+  focused, the stop lingers until the next size change (a lingering
+  stop on a fitting region, once; the reader was just there). Also
+  worth knowing: a region whose content sits under the 64px floor
+  (`min-height`, content-box → 74px client) can never overflow through
+  a resize — the floor holds more than its content.
+- **jsdom quirk, recorded for the next test author:** jsdom 27's
+  `:focus` selector stays matched after `blur()` (and after focusing
+  another element) while `activeElement` is correct. The focus guard
+  reads the root's `activeElement` — right for the closed shadow root
+  too, where `document.activeElement` is only the retargeted host —
+  and never `matches(":focus")`.
+
+### labels.ts comment
+
+The privacy-note comment claimed per-image disclosure of the
+remote-manifest fetch "is Phase 3 work"; it now records the 2026-08-05
+decision (dropped per image; the privacy write-up keeps the sentence,
+roadmap chunk 8). `failureLine`'s parameter is `checkName`, documented
+as the presenters-layer display name, so the next reader doesn't pass
+an id.
+
+### Verification
+
+- 297/297 tests pass (8 new: display-name lookup ×3 including the
+  Object.prototype-key pin; raw-id failure line; region naming +
+  conditional stop; ResizeObserver tracking via a stubbed observer;
+  focused-region guard; `.evidence:focus-visible` stylesheet pin); the
+  existing failure-line pin updated to the display name. Typecheck,
+  Prettier, build clean (content bundle 76.8 kB).
+- Live (Chrome 152, standalone probe page bundling the real
+  `buildPopoverContent` under the real `BADGE_STYLE`, closed shadow
+  root, port 8919 — no extension reload): both failure lines rendered
+  as designed (`"Content Credentials"` for c2pa, raw id for an
+  unregistered provider). Rich panel (480px of evidence in a 79px
+  region): Tab from the disclosure landed on the region with the ring
+  visible and un-clipped, End scrolled it to 401/401 with page scrollY
+  unchanged; Tab then reached the next panel's disclosure. Short
+  Unknown panel (74/74): no stop — Tab skipped the region. Observer
+  path: adding content until the panel hit its cap set the stop with no
+  click; shrinking the window to a 237px viewport (region at its 74px
+  floor) set it; growing back with the region focused kept it; growing
+  back unfocused (126→102 box change, overflow gone) removed it.
+  Removing the tabindex by hand still landed Tab on the region — Chrome
+  152's native focusable scrollers — which is why the attribute, not
+  the landing, is what the tests and this record assert. Zero console
+  errors.

@@ -13,6 +13,13 @@ import type { C2paDetail } from "./mapping";
 
 export const C2PA_PROVIDER_ID = "c2pa";
 
+/** How the popover names this check to the reader where a provider must be
+ * named — today the failure line ("The … check failed"). "Content
+ * Credentials" is the term the summaries below already use for C2PA at the
+ * disclosure layer, so the name introduces no new vocabulary; the raw id
+ * ("c2pa") is code, and never reaches the surface (roadmap chunk 4). */
+export const C2PA_DISPLAY_NAME = "Content Credentials";
+
 const SUMMARIES: Record<C2paDetail["reason"], string> = {
   // Mirrors the verdict-level "ai-declared" wording (labels.ts): the
   // reason also fires for a composite declaration on an ingredient
