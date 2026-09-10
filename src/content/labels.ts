@@ -70,17 +70,18 @@ export const POPOVER_STRINGS = {
     "incomplete.",
   /** One line per provider failure inside the disclosure. `checkName` is
    * the check's reader-facing name from the presenters registry
-   * (providers/presenters.ts — "Content Credentials", not "c2pa"); the
-   * message is the provider's own error text. */
+   * (providers/presenters.ts — "Content Credentials", not "c2pa"; only a
+   * provider with no presenter entry is named by its raw id); the message
+   * is the provider's own error text. */
   failureLine: (checkName: string, message: string): string =>
     `The "${checkName}" check failed: ${message}`,
   /** Free-tier privacy, stated where trust is earned (PRODUCT.md
    * principle 4). Worded to stay true in every case: image bytes never
    * leave and validation is local WASM, but an asset referencing remote
    * provenance does trigger a fetch of that reference — disclosed in
-   * DECISIONS.md and in the privacy write-up (roadmap chunk 8); per-image
-   * disclosure of it was dropped by owner decision, 2026-08-05 — so this
-   * line claims only what always holds. */
+   * DECISIONS.md, to be carried by the privacy write-up (roadmap chunk 8,
+   * queued); per-image disclosure of it was dropped by owner decision,
+   * 2026-08-05 — so this line claims only what always holds. */
   privacyNote:
     "The image itself never left your machine — the check ran on this " +
     "device.",

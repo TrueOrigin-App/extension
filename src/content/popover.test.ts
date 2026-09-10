@@ -6,7 +6,11 @@
 // (naming checks by their presenters-layer display name), the generic
 // fallback that keeps the popover provider-agnostic (plan.md §8,
 // constraint 4), and the evidence region's keyboard reachability — a tab
-// stop exactly while it overflows (roadmap chunk 4).
+// stop exactly while it overflows, leaving with the reader's focus and
+// letting go of its observer when the panel is torn down (roadmap chunk 4).
+//
+// ResizeObserver comes from vitest.setup.ts (inert); the tests that drive
+// it stub the global themselves.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalResult, VerdictId } from "../core/types";
 import type { WireVerdict } from "../messaging/protocol";
@@ -20,6 +24,9 @@ function c2paSignal(detail: unknown): SignalResult {
 function render(verdict: WireVerdict): HTMLDivElement {
   const container = document.createElement("div");
   container.append(buildPopoverContent(verdict));
+  // In the document, as the real panel is: the focus tracker treats a
+  // detached region as torn down.
+  document.body.append(container);
   return container;
 }
 
@@ -156,17 +163,29 @@ describe("buildPopoverContent", () => {
 
   it("marks degraded verdicts and lists each failure", () => {
     const container = render(
-      make("unknown", [], [{ providerId: "c2pa", message: "trust fetch 503" }]),
+      make(
+        "unknown",
+        [],
+        [
+          { providerId: "c2pa", message: "trust fetch 503" },
+          { providerId: "future-watermark", message: "timeout" },
+        ],
+      ),
     );
 
     expect(container.querySelector(".notice")?.textContent).toContain(
       "incomplete",
     );
-    // The check is named by its presenters-layer display name, not the
-    // wire id; the message stays the provider's own words.
-    expect(container.querySelector(".failure")?.textContent).toBe(
-      'The "Content Credentials" check failed: trust fetch 503',
+    // One line per failure, each check named by its own presenters-layer
+    // display name (the raw id only without a presenter); the message
+    // stays the provider's own words.
+    const lines = Array.from(container.querySelectorAll(".failure")).map(
+      (line) => line.textContent,
     );
+    expect(lines).toEqual([
+      'The "Content Credentials" check failed: trust fetch 503',
+      'The "future-watermark" check failed: timeout',
+    ]);
   });
 
   it("names failures from providers without a presenter by their raw id", () => {
@@ -269,6 +288,9 @@ describe("buildPopoverContent", () => {
       expect(observer.callbacks).toHaveLength(1);
       const resized = observer.callbacks[0]!;
 
+      // Nothing to track while collapsed.
+      expect(observer.observe).not.toHaveBeenCalled();
+
       setScrollMetrics(evidence, FITTING);
       disclosure.click();
       expect(observer.observe).toHaveBeenCalledWith(evidence);
@@ -284,13 +306,17 @@ describe("buildPopoverContent", () => {
       expect(evidence.hasAttribute("tabindex")).toBe(false);
 
       disclosure.click();
-      expect(observer.disconnect).toHaveBeenCalled();
+      expect(observer.disconnect).toHaveBeenCalledTimes(1);
+
+      // Collapse must not retire the tracker: the next expand observes
+      // again.
+      disclosure.click();
+      expect(observer.observe).toHaveBeenCalledTimes(2);
     });
 
     it("keeps a focused region focusable when its overflow disappears", () => {
       const observer = stubResizeObserver();
       const container = render(make("unknown"));
-      document.body.append(container);
       const disclosure =
         container.querySelector<HTMLButtonElement>(".disclosure")!;
       const evidence = container.querySelector<HTMLDivElement>(".evidence")!;
@@ -307,10 +333,31 @@ describe("buildPopoverContent", () => {
       expect(evidence.getAttribute("tabindex")).toBe("0");
       expect(document.activeElement).toBe(evidence);
 
-      // Once focus has moved on, the stop goes with the overflow.
+      // Once focus moves on, the stop goes with it — on focusout alone,
+      // no resize needed: a lingering stop would land every later Tab on
+      // a region with nothing to scroll.
       evidence.blur();
-      resized();
       expect(evidence.hasAttribute("tabindex")).toBe(false);
+    });
+
+    it("lets the observer go once the panel is torn down", () => {
+      const observer = stubResizeObserver();
+      const container = render(make("unknown"));
+      const disclosure =
+        container.querySelector<HTMLButtonElement>(".disclosure")!;
+      const evidence = container.querySelector<HTMLDivElement>(".evidence")!;
+      const resized = observer.callbacks[0]!;
+
+      setScrollMetrics(evidence, OVERFLOWING);
+      disclosure.click();
+      expect(observer.disconnect).not.toHaveBeenCalled();
+
+      // badge.ts removes the panel (light dismiss, verdict rebuild,
+      // removeAllBadges) with no hook into popover.ts; the observer's next
+      // delivery — a 0×0 box for the detached region — is the teardown.
+      container.remove();
+      resized();
+      expect(observer.disconnect).toHaveBeenCalledTimes(1);
     });
   });
 });

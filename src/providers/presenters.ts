@@ -36,7 +36,11 @@ export interface SignalPresentation {
  * (constraint 4). */
 export interface SignalPresenter {
   name: string;
-  present(signal: SignalResult): SignalPresentation;
+  // Property syntax, not method shorthand: TypeScript checks method
+  // parameters bivariantly even under strictFunctionTypes, which would let
+  // a presenter typed for a narrower signal register and then read
+  // undefined detail fields at runtime.
+  present: (signal: SignalResult) => SignalPresentation;
 }
 
 // A Map, not an object literal: provider ids index it, and an id that
@@ -58,6 +62,13 @@ function presentGenericSignal(signal: SignalResult): SignalPresentation {
   };
 }
 
+/** Whether a provider ships a presenter entry. Exists for the registry
+ * test that ties activeProviders to this Map — a provider without one
+ * degrades to the generic fallbacks below, honestly but visibly. */
+export function hasPresenter(providerId: string): boolean {
+  return presenters.has(providerId);
+}
+
 export function presentSignal(signal: SignalResult): SignalPresentation {
   const presenter = presenters.get(signal.providerId);
   return presenter ? presenter.present(signal) : presentGenericSignal(signal);
@@ -65,7 +76,10 @@ export function presentSignal(signal: SignalResult): SignalPresentation {
 
 /** The reader-facing name of a provider's check, for popover lines that
  * must name one (failure lines). Falls back to the raw id for providers
- * without a presenter — the same generic honesty as presentGenericSignal. */
+ * without a presenter — the same generic honesty as presentGenericSignal.
+ * `||`, not `??`: a registered entry with a blank name is a bug, and it
+ * must degrade to the same raw-id fallback rather than render
+ * `The "" check failed`. */
 export function providerDisplayName(providerId: string): string {
-  return presenters.get(providerId)?.name ?? providerId;
+  return presenters.get(providerId)?.name || providerId;
 }

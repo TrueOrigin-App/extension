@@ -11,6 +11,7 @@
 import { verdictClassForSignal } from "../core/verdict";
 import type { WireVerdict } from "../messaging/protocol";
 import { presentSignal, providerDisplayName } from "../providers/presenters";
+import { activeElementIn } from "./focus";
 import {
   POPOVER_STRINGS,
   VERDICT_EXPLANATIONS,
@@ -38,37 +39,42 @@ let nextEvidenceId = 0;
  * height cap (70vh) can change the answer under a window resize. A
  * region that currently holds focus keeps its stop even when overflow
  * disappears: dropping focusability under the reader's focus would eject
- * focus to the document. */
+ * focus to the document. The stop leaves with the reader instead —
+ * focusout re-runs the check.
+ *
+ * Returns the open/closed switch the disclosure drives. */
 function trackScrollFocusability(
   evidence: HTMLDivElement,
-  disclosure: HTMLButtonElement,
-): { expanded(): void; collapsed(): void } {
+): (open: boolean) => void {
   const update = (): void => {
+    if (!evidence.isConnected) {
+      // Teardown. badge.ts removes the panel (light dismiss, verdict
+      // rebuild, removeAllBadges) with no hook into this module; the
+      // observer's next delivery — a 0×0 box for the detached region — is
+      // the signal to let go.
+      observer.disconnect();
+      return;
+    }
     if (evidence.scrollHeight > evidence.clientHeight) {
       evidence.tabIndex = 0;
       return;
     }
-    // Focus is read off the region's root: inside the closed shadow tree
-    // the document-level activeElement is only the retargeted host.
-    const root = evidence.getRootNode();
-    const focused = "activeElement" in root && root.activeElement === evidence;
-    if (!focused) evidence.removeAttribute("tabindex");
-  };
-  // jsdom has no ResizeObserver; the synchronous read on expand is the
-  // behavior the tests pin, the observer is the live-resize follow-up.
-  const observer =
-    typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
-  evidence.setAttribute("role", "region");
-  evidence.setAttribute("aria-labelledby", disclosure.id);
-  return {
-    expanded() {
-      update();
-      observer?.observe(evidence);
-    },
-    collapsed() {
-      observer?.disconnect();
+    if (activeElementIn(evidence) !== evidence) {
       evidence.removeAttribute("tabindex");
-    },
+    }
+  };
+  const observer = new ResizeObserver(update);
+  // Both Blink and jsdom clear the active element before dispatching
+  // focusout, so the focus guard above sees the region as unfocused here.
+  evidence.addEventListener("focusout", update);
+  return (open) => {
+    if (open) {
+      update();
+      observer.observe(evidence);
+    } else {
+      observer.disconnect();
+      evidence.removeAttribute("tabindex");
+    }
   };
 }
 
@@ -153,10 +159,10 @@ export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   for (const signal of verdict.signals) {
     evidence.append(signalSection(signal));
   }
-  // Failures name their check by the presenters-layer display name, never
-  // the wire id: "c2pa" is code, "Content Credentials" is what the
-  // disclosure already calls it. The error text stays as the provider
-  // reported it — technical, but true.
+  // Failures name their check by the presenters-layer display name
+  // ("Content Credentials", not "c2pa"); only a provider with no presenter
+  // entry is named by its raw id, and the registry entry is the fix. The
+  // error text stays as the provider reported it — technical, but true.
   for (const failure of verdict.failures) {
     evidence.append(
       paragraph(
@@ -179,13 +185,14 @@ export function buildPopoverContent(verdict: WireVerdict): DocumentFragment {
   disclosure.textContent = POPOVER_STRINGS.disclosureLabel;
   disclosure.setAttribute("aria-expanded", "false");
   disclosure.setAttribute("aria-controls", evidence.id);
-  const scrollFocus = trackScrollFocusability(evidence, disclosure);
+  evidence.setAttribute("role", "region");
+  evidence.setAttribute("aria-labelledby", disclosure.id);
+  const setOpen = trackScrollFocusability(evidence);
   disclosure.addEventListener("click", () => {
-    const expanded = disclosure.getAttribute("aria-expanded") === "true";
-    disclosure.setAttribute("aria-expanded", String(!expanded));
-    evidence.hidden = expanded;
-    if (expanded) scrollFocus.collapsed();
-    else scrollFocus.expanded();
+    const open = disclosure.getAttribute("aria-expanded") !== "true";
+    disclosure.setAttribute("aria-expanded", String(open));
+    evidence.hidden = !open;
+    setOpen(open);
   });
 
   fragment.append(

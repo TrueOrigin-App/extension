@@ -234,7 +234,12 @@ describe("popover", () => {
     const image = makeImage("https://example.com/a.jpg");
     renderBadge(image, wire("unknown"), image.src);
     const style = overlayRoot?.querySelector("style")?.textContent;
-    expect(style).toContain(".evidence:focus-visible");
+    // The outline declaration itself, not just the selector: `outline:
+    // none` there would pass a presence check while the tab stop turned
+    // invisible.
+    expect(style).toMatch(
+      /\.evidence:focus-visible\s*\{[^}]*outline:\s*2px solid/,
+    );
   });
 
   it("pins the explicit direction reset (all:initial excludes direction)", () => {
